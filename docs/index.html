@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tanker Stowage Planner (MVP)</title>
+    <link rel="stylesheet" href="styles.css?v=4" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Tanker Stowage Planner — MVP</h1>
+      <div class="header-controls">
+        <div class="view-tabs">
+          <button class="tab" data-view="config">Tank Config</button>
+          <button class="tab active" data-view="cargo">Cargo & Allocation</button>
+          <button class="tab" data-view="layout">Layout Plan</button>
+        </div>
+        <div class="actions">
+          <button id="btn-compute" class="btn-primary">Run Stowage Options</button>
+        </div>
+      </div>
+    </header>
+    <main class="container">
+      <section id="view-config" class="panel view">
+        <h2>Tank Editor</h2>
+        <div id="tank-editor"></div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+          <button id="btn-add-center">Add Center Tank</button>
+        </div>
+        <div style="margin-top:10px; border-top:1px solid #1b254a; padding-top:10px;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <strong style="font-size:13px; color:#9aa3b2;">Ship Configs</strong>
+            <input id="cfg-name" placeholder="e.g. Ship No. 1" style="min-width:180px;" />
+            <button id="btn-save-cfg">Save Config</button>
+            <select id="cfg-select" style="min-width:180px;"></select>
+            <button id="btn-load-cfg">Load</button>
+            <button id="btn-export-cfg">Export Config</button>
+            <button id="btn-del-cfg">Delete</button>
+            <input type="file" id="file-import-cfg" accept="application/json" style="display:none;" />
+          </div>
+        </div>
+      </section>
+      <section id="view-cargo" class="panel view active">
+        <h2>Cargo Input</h2>
+        <div class="card quick-plan" style="margin-bottom:12px;">
+          <h3 style="margin:6px 0 8px; font-size:14px;">Quick Plan — Reverse from Draft</h3>
+          <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; align-items:end;">
+            <label>
+              Target Max Draft (m)
+              <input id="rs_target_draft" type="number" step="0.01" placeholder="e.g. 13.00" />
+            </label>
+            <label>
+              Water Density ρ (t/m³)
+              <input id="rs_rho" type="text" inputmode="decimal" placeholder="1.025" />
+            </label>
+            <label>
+              FO (t)
+              <input id="rs_fo_mt" type="number" step="0.1" placeholder="0" />
+            </label>
+            <label>
+              FW (t)
+              <input id="rs_fw_mt" type="number" step="0.1" placeholder="0" />
+            </label>
+            <label>
+              Others (t)
+              <input id="rs_oth_mt" type="number" step="0.1" placeholder="0" />
+            </label>
+            <label>
+              Constant (t)
+              <input id="rs_const_mt" type="number" step="0.1" placeholder="0" />
+            </label>
+            <label>
+              Constant L.C.G. (m)
+              <input id="rs_const_lcg" type="number" step="0.01" placeholder="0.00" />
+            </label>
+            <div>
+              <button id="btn-solve-draft" class="btn-primary">Solve From Draft & Run</button>
+            </div>
+          </div>
+          <small style="display:block; margin-top:6px; color:#9aa3b2;">Keeps current parcels. Solver finds max cargo for target mean draft; distributes with current tank limits.</small>
+        </div>
+        <div id="parcel-editor"></div>
+        <div class="parcel-actions">
+          <button id="btn-add-parcel">Add Parcel</button>
+        </div>
+        <div id="summary"></div>
+        <div id="legend" class="legend"></div>
+        <hr style="border: none; border-top: 1px solid #1b254a; margin: 12px 0;" />
+        <h3 style="margin:8px 0; font-size:14px;">Allocated Tanks</h3>
+        <div id="alloc-table"></div>
+        <h3 style="margin:12px 0 8px; font-size:14px;">Parcels Summary</h3>
+        <div id="parcel-table"></div>
+        <div id="warnings" class="warn"></div>
+      </section>
+      <section id="view-layout" class="panel view">
+        <h2>Distribution Result</h2>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+          <button id="btn-export-json">Export JSON</button>
+          <label for="plan-variant" style="color:#9aa3b2; font-size:13px;">Plan Options</label>
+          <select id="plan-variant" style="min-width:220px;"></select>
+        </div>
+        <div id="hydro-summary" class="card" style="margin-bottom:10px; display:none;"></div>
+        <div id="layout-grid" class="layout-wrap"></div>
+        <div id="svg-container" class="svg-wrap" style="display:none;"></div>
+        <!-- Reasoning trace hidden in UI -->
+      </section>
+    </main>
+    <script type="module" src="app.js?v=4"></script>
+  </body>
+  </html>
