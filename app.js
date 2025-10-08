@@ -1197,7 +1197,7 @@ async function reverseSolveAndRun() {
   const denomMass0 = baseVolumes.reduce((s, r) => s + (r.v0 * (r.rho_i/1000)), 0) || 1;
   const scaleHydro = M_cargo_allow / denomMass0; // scales volumes to meet hydro mass
 
-  // Try high → if infeasible, decrease scale until feasible
+  // Try high → if infeasible or violates max draft, decrease scale until feasible
   let sLo = 0, sHi = scaleHydro, sBest = 0;
   for (let iter = 0; iter < 20; iter++) {
     const s = (sLo + sHi) / 2;
@@ -1209,7 +1209,16 @@ async function reverseSolveAndRun() {
       return { ...p, total_m3: Number.isFinite(v) ? v : 0, fill_remaining: false };
     });
     const r = computePlan(tanks, parcels);
-    const ok = r && r.allocations && r.allocations.length > 0 && (!r.diagnostics || !(r.diagnostics.errors||[]).length);
+    let ok = r && r.allocations && r.allocations.length > 0 && (!r.diagnostics || !(r.diagnostics.errors||[]).length);
+    if (ok) {
+      const m = computeHydroForAllocations(r.allocations);
+      if (!m) { ok = false; }
+      else {
+        const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
+        // Enforce max(F/M/A) <= target draft (with small tolerance)
+        if (maxT > targetDraft + 1e-3) ok = false;
+      }
+    }
     if (ok) { sBest = s; sLo = s; } else { sHi = s; }
     // restore for next iteration
     parcels = old;
