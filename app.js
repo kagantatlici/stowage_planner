@@ -784,6 +784,22 @@ function fillVariantSelect() {
 
 function computeAndRender() {
   variantsCache = computeVariants();
+  // If target draft is provided, filter variants that violate max(F/M/A) > target
+  try {
+    const target = getReverseInputs && rsTargetDraftEl ? getReverseInputs().targetDraft : NaN;
+    if (isFinite(target) && target > 0) {
+      const filtered = {};
+      Object.entries(variantsCache || {}).forEach(([key, entry]) => {
+        try {
+          const m = computeHydroForAllocations(entry.res?.allocations || []);
+          if (!m) return;
+          const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
+          if (maxT <= target + 1e-3) filtered[key] = entry;
+        } catch {}
+      });
+      if (Object.keys(filtered).length > 0) variantsCache = filtered;
+    }
+  } catch {}
   fillVariantSelect();
   const v = variantsCache[selectedVariantKey];
   persistLastState();
