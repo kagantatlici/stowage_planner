@@ -65,12 +65,20 @@ viewTabs.forEach(btn => btn.addEventListener('click', () => setActiveView(btn.ge
 const LS_PRESETS = 'stowage_presets_v1';
 // Bump last-state key to avoid overriding new defaults with old cached state
 const LS_LAST = 'stowage_last_v2';
+// Per-preset ship meta (stability/hydro/LCGs) storage
+const LS_SHIP_META = 'stowage_ship_meta_v1';
 
 function loadPresets() {
   try { return JSON.parse(localStorage.getItem(LS_PRESETS) || '{}'); } catch { return {}; }
 }
 function savePresets(p) {
   localStorage.setItem(LS_PRESETS, JSON.stringify(p));
+}
+function loadShipMeta() {
+  try { return JSON.parse(localStorage.getItem(LS_SHIP_META) || '{}'); } catch { return {}; }
+}
+function saveShipMeta(m) {
+  localStorage.setItem(LS_SHIP_META, JSON.stringify(m || {}));
 }
 function refreshPresetSelect() {
   const presets = loadPresets();
@@ -205,6 +213,122 @@ function normalizeCargoNameToId(name) {
   return null;
 }
 
+// ---- Ship meta handling (import stability/hydro/LCGs) ----
+function convertLongitudinalToMidship(x, lbp, ref) {
+  if (!isFinite(x)) return x;
+  const r = String(ref || '').toLowerCase();
+  if (!r || r === 'ms_plus') return x;      // midship (+ forward)
+  if (r === 'ms_minus') return -x;          // midship (− forward)
+  if (!isFinite(lbp) || lbp <= 0) return x; // AP/FP need LBP
+  if (r === 'ap_plus') return x - lbp/2;    // AP (+ forward) → midship
+  if (r === 'fp_minus') return x + lbp/2;   // FP (− aft) → midship
+  return x;
+}
+
+function convertProfileLongitudes(profile) {
+  try {
+    const lbp = Number(profile?.ship?.lbp);
+    const ref = profile?.ship?.long_ref;
+    if (!ref) return profile;
+    // Hydro rows
+    if (profile.hydrostatics && Array.isArray(profile.hydrostatics.rows)) {
+      for (const r of profile.hydrostatics.rows) {
+        if (r && typeof r.lcf_m === 'number') r.lcf_m = convertLongitudinalToMidship(r.lcf_m, lbp, ref);
+        if (r && typeof r.lcb_m === 'number') r.lcb_m = convertLongitudinalToMidship(r.lcb_m, lbp, ref);
+      }
+    }
+    // Tank LCGs
+    const cats = ['cargo','ballast','consumables'];
+    if (profile.tanks) {
+      for (const c of cats) {
+        const arr = profile.tanks[c];
+        if (Array.isArray(arr)) {
+          for (const t of arr) {
+            if (t && typeof t.lcg === 'number') t.lcg = convertLongitudinalToMidship(t.lcg, lbp, ref);
+          }
+        }
+      }
+    }
+    // Light ship / constant
+    if (profile.ship && profile.ship.light_ship && typeof profile.ship.light_ship.lcg === 'number') {
+      profile.ship.light_ship.lcg = convertLongitudinalToMidship(profile.ship.light_ship.lcg, lbp, ref);
+    }
+    if (profile.ship && profile.ship.constant && typeof profile.ship.constant.lcg === 'number') {
+      profile.ship.constant.lcg = convertLongitudinalToMidship(profile.ship.constant.lcg, lbp, ref);
+    }
+  } catch {}
+  return profile;
+}
+
+function extractShipMetaFromProfile(profile) {
+  try {
+    if (!profile || !profile.ship) return null;
+    const p = convertProfileLongitudes(JSON.parse(JSON.stringify(profile)));
+    const name = p.ship.name || p.ship.id || 'Ship';
+    const meta = { name };
+    if (isFinite(p.ship.lbp)) meta.lbp = Number(p.ship.lbp);
+    if (isFinite(p.ship.rho_ref)) meta.rho_ref = Number(p.ship.rho_ref);
+    if (p.ship.light_ship && isFinite(p.ship.light_ship.weight) && isFinite(p.ship.light_ship.lcg)) {
+      meta.light_ship = { weight_mt: Number(p.ship.light_ship.weight), lcg: Number(p.ship.light_ship.lcg) };
+    }
+    if (p.hydrostatics && Array.isArray(p.hydrostatics.rows)) {
+      meta.hydrostatics = { rows: p.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m) };
+    }
+    // Build tank LCG map for cargo/slops
+    const tank_lcgs = {};
+    const pushLCGs = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const t of arr) {
+        if (!t || typeof t.lcg !== 'number') continue;
+        const norm = normalizeCargoNameToId(t.name || t.id || '');
+        if (norm && /^COT\d+(P|S|C)$/.test(norm.id)) tank_lcgs[norm.id] = Number(t.lcg);
+        else if (/SLOP/i.test(String(t.name||''))) {
+          const side = /(\(|\s)(P|S)(\)|\b)/.exec(String(t.name||'').toUpperCase());
+          if (side && side[2]==='P') tank_lcgs['SLOPP'] = Number(t.lcg);
+          if (side && side[2]==='S') tank_lcgs['SLOPS'] = Number(t.lcg);
+        }
+      }
+    };
+    if (p.tanks) {
+      pushLCGs(p.tanks.cargo);
+      // slops are usually in cargo array; included above
+    }
+    if (Object.keys(tank_lcgs).length) meta.tank_lcgs = tank_lcgs;
+    // Approximate single consumables LCG from FO/FW/OTH if provided
+    if (p.tanks && Array.isArray(p.tanks.consumables)) {
+      const cons = p.tanks.consumables;
+      const pick = (type)=> cons.find(x => String(x.type||'').toLowerCase()===type);
+      const fo = pick('fo'); const fw = pick('fw'); const oth = pick('oth');
+      const vals = [fo, fw, oth].filter(x => x && isFinite(x.lcg)).map(x => Number(x.lcg));
+      if (vals.length > 0) {
+        const avg = vals.reduce((s,v)=>s+v,0)/vals.length;
+        meta.lcg_fo_fw = avg;
+      }
+    }
+    return meta;
+  } catch { return null; }
+}
+
+function applyShipMeta(meta) {
+  if (!meta || typeof meta !== 'object') return;
+  try {
+    if (isFinite(meta.lbp)) SHIP_PARAMS.LBP = Number(meta.lbp);
+    if (isFinite(meta.rho_ref)) SHIP_PARAMS.RHO_REF = Number(meta.rho_ref);
+    if (meta.light_ship && isFinite(meta.light_ship.weight_mt) && isFinite(meta.light_ship.lcg)) {
+      LIGHT_SHIP.weight_mt = Number(meta.light_ship.weight_mt);
+      LIGHT_SHIP.lcg = Number(meta.light_ship.lcg);
+    }
+    if (isFinite(meta.lcg_fo_fw)) SHIP_PARAMS.LCG_FO_FW = Number(meta.lcg_fo_fw);
+    if (meta.hydrostatics && Array.isArray(meta.hydrostatics.rows) && meta.hydrostatics.rows.length) {
+      HYDRO_ROWS = meta.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m);
+    }
+    if (meta.tank_lcgs) {
+      const m = new Map();
+      Object.entries(meta.tank_lcgs).forEach(([k,v])=>{ if (isFinite(v)) m.set(k, Number(v)); });
+      TANK_LCG_MAP = m;
+    }
+  } catch {}
+}
 function mapCargoArrayToTanks(cargoArr, defaults = { min_pct: 0.5, max_pct: 0.98 }) {
   const out = [];
   if (!Array.isArray(cargoArr)) return out;
@@ -874,6 +998,8 @@ function autoLoadFirstPresetIfExists() {
   if (!Array.isArray(conf)) return false;
   tanks = conf.map(t => ({ ...t }));
   try { cfgSelect.value = name; cfgNameInput.value = name; } catch {}
+  // Apply meta if stored for this preset
+  try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch {}
   persistLastState();
   return true;
 }
@@ -928,6 +1054,8 @@ if (cfgSelect) {
     if (!Array.isArray(conf)) return;
     tanks = conf.map(t => ({ ...t }));
     try { cfgNameInput.value = name; } catch {}
+    // Apply ship meta for this preset if available
+    try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch {}
     persistLastState();
     render();
   });
@@ -957,20 +1085,39 @@ if (fileImportCfg) {
           return name;
         };
         const importedNames = [];
+        const nameMap = {}; // baseName -> assignedName
         for (const s of ships) {
-          const name = uniquify(String(s.name || 'Ship'));
+          const baseName = String(s.name || 'Ship');
+          const name = uniquify(baseName);
           const clean = s.tanks.map(t => ({ id: t.id, volume_m3: t.volume_m3, min_pct: t.min_pct, max_pct: t.max_pct, included: t.included, side: t.side }));
           presets[name] = clean;
           importedNames.push(name);
+          nameMap[baseName] = name;
         }
         savePresets(presets);
         refreshPresetSelect();
+        // If JSON bundle contains full ship profiles, extract and save meta per preset name
+        try {
+          const metaStore = loadShipMeta();
+          if (json && Array.isArray(json.ships)) {
+            for (const prof of json.ships) {
+              const baseName = prof?.ship?.name || prof?.name || 'Ship';
+              const assigned = nameMap[baseName];
+              if (!assigned) continue;
+              const meta = extractShipMetaFromProfile(prof);
+              if (meta) metaStore[assigned] = meta;
+            }
+            saveShipMeta(metaStore);
+          }
+        } catch {}
         // Optionally set the first imported ship as current
         if (importedNames.length > 0) {
           const firstName = importedNames[0];
           cfgSelect.value = firstName;
           cfgNameInput.value = firstName;
           tanks = presets[firstName].map(t => ({ ...t }));
+          // Apply ship meta if available
+          try { const meta = loadShipMeta()[firstName]; if (meta) applyShipMeta(meta); } catch {}
           persistLastState();
           render();
         }
@@ -980,6 +1127,21 @@ if (fileImportCfg) {
         const vmap = buildVolumeMapFromJSON(json);
         if (!vmap || vmap.size === 0) { alert('JSON içinde tanınan tank kapasitesi bulunamadı.'); return; }
         tanks = tanks.map(t => vmap.has(t.id) ? { ...t, volume_m3: vmap.get(t.id) } : t);
+        // Also try to extract single-ship meta if present
+        try {
+          const metaStore = loadShipMeta();
+          let prof = null; let name = (cfgNameInput.value||'').trim() || 'Imported Ship';
+          if (json && json.ship && (json.tanks || json.hydrostatics)) prof = json;
+          else if (Array.isArray(json) && json.length && json[0] && json[0].ship) prof = json[0];
+          if (prof) {
+            const meta = extractShipMetaFromProfile(prof);
+            if (meta) {
+              metaStore[name] = meta;
+              saveShipMeta(metaStore);
+              applyShipMeta(meta);
+            }
+          }
+        } catch {}
         persistLastState();
         render();
         alert('JSON dosyasından tank kapasiteleri içe aktarıldı.');
