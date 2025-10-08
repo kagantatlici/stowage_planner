@@ -1024,27 +1024,145 @@ btnDelCfg.addEventListener('click', () => {
   refreshPresetSelect();
 });
 
-// Export current scenario (tanks + parcels + computed plan)
-btnExportJson.addEventListener('click', async () => {
-  // Export all plan options in one click
+// ---- Compact export for quick copy/paste diagnostics ----
+function quickHash(str) {
+  // Tiny 32-bit FNV-1a-like hash for short signature
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
+function fmtPct01(x) {
+  // 0..1 -> integer percent
+  const v = Math.round((x || 0) * 100);
+  return String(v);
+}
+
+function fmtVol(v) {
+  if (!isFinite(v)) return '0';
+  const iv = Math.round(v);
+  return Math.abs(iv - v) < 1e-6 ? String(iv) : v.toFixed(1);
+}
+
+function buildCompactExportText() {
+  // Choose currently selected plan (fallback min_k)
   if (!variantsCache) variantsCache = computeVariants();
-  const plans = {};
-  Object.entries(variantsCache).forEach(([key, entry]) => {
-    const { id, res } = entry;
-    plans[key] = {
-      label: id,
-      allocations: res.allocations || [],
-      diagnostics: res.diagnostics || null
-    };
+  const chosen = variantsCache[selectedVariantKey] || variantsCache['min_k'];
+  const res = chosen?.res || computePlan(tanks, parcels);
+  const di = res?.diagnostics || {};
+
+  // Inputs (compact)
+  const tankTokens = (tanks || []).map(t => {
+    const inc = t.included === false ? 'x' : '';
+    return `${t.id}:${fmtVol(t.volume_m3)}@${fmtPct01(t.min_pct)}-${fmtPct01(t.max_pct)}${inc}`;
   });
-  const data = { tanks, parcels, plans };
-  const text = JSON.stringify(data, null, 2);
+  const parcelTokens = (parcels || []).map(p => {
+    const fr = p.fill_remaining ? 1 : 0;
+    return `${p.id}(${(p.name||'').trim()}):V${fmtVol(p.total_m3||0)} R${fmtVol(p.density_kg_m3||0)} T${fmtVol(p.temperature_c||0)} FR${fr}`;
+  });
+
+  // Reverse-solver inputs (if present)
+  let reverseLine = '';
   try {
-    await navigator.clipboard.writeText(text);
-    alert('Copied ALL plan options JSON to clipboard.');
+    const target = rsTargetDraftEl && parseFloat(rsTargetDraftEl.value);
+    const rho = rsRhoEl && parseFloat(String(rsRhoEl.value||'').replace(',','.'));
+    const fo = rsFoEl && parseFloat(rsFoEl.value);
+    const fw = rsFwEl && parseFloat(rsFwEl.value);
+    const oth = rsOthEl && parseFloat(rsOthEl.value);
+    const cst = rsConstEl && parseFloat(rsConstEl.value);
+    const clcg = rsConstLcgEl && parseFloat(rsConstLcgEl.value);
+    if (isFinite(target) || isFinite(rho) || isFinite(fo) || isFinite(fw) || isFinite(oth) || isFinite(cst)) {
+      const parts = [];
+      if (isFinite(target)) parts.push(`T=${fmtVol(target)}`);
+      if (isFinite(rho)) parts.push(`rho=${String(rho)}`);
+      if (isFinite(fo)) parts.push(`FO=${fmtVol(fo)}`);
+      if (isFinite(fw)) parts.push(`FW=${fmtVol(fw)}`);
+      if (isFinite(oth)) parts.push(`OTH=${fmtVol(oth)}`);
+      if (isFinite(cst)) parts.push(`CONST=${fmtVol(cst)}`);
+      if (isFinite(clcg)) parts.push(`CONST_LCG=${fmtVol(clcg)}`);
+      reverseLine = parts.length ? `RS{${parts.join(' ')}}` : '';
+    }
+  } catch {}
+
+  // Result summary
+  const pwt = di.port_weight_mt != null ? Math.round(di.port_weight_mt) : 0;
+  const swt = di.starboard_weight_mt != null ? Math.round(di.starboard_weight_mt) : 0;
+  const imb = di.imbalance_pct != null ? Math.round(di.imbalance_pct) : 0;
+  const bstat = di.balance_status || 'NA';
+  const wcount = (di.warnings || []).length || 0;
+  const ecount = (di.errors || []).length || 0;
+
+  // Allocations (only used tanks)
+  const allocTokens = (res.allocations || [])
+    .map(a => `${a.tank_id}:${a.parcel_id}=${fmtVol(a.assigned_m3)}|F${Math.round((a.fill_pct||0)*100)}|W${fmtVol(a.weight_mt)}`);
+
+  // Minimal trace per parcel (chosen k)
+  const trace = Array.isArray(di.reasoning_trace) ? di.reasoning_trace : [];
+  const byParcel = new Map();
+  trace.forEach(tr => {
+    if (!tr || !tr.parcel_id) return;
+    byParcel.set(tr.parcel_id, tr);
+  });
+  const traceTokens = Array.from(byParcel.entries()).map(([pid, tr]) => {
+    const kL = tr.k_low != null ? tr.k_low : '?';
+    const kH = tr.k_high != null ? tr.k_high : '?';
+    const kC = tr.chosen_k != null ? tr.chosen_k : '?';
+    const per = tr.per_tank_v != null ? fmtVol(tr.per_tank_v) : '?';
+    const par = tr.parity_adjustment || 'n';
+    return `${pid}:k${kL}-${kH}->${kC}@${per}(${par})`;
+  });
+
+  // Short signature over inputs+allocs
+  const sigBase = JSON.stringify({
+    t: tanks.map(t => ({ id: t.id, v: t.volume_m3, a: t.min_pct, b: t.max_pct, i: !!t.included })),
+    p: parcels.map(p => ({ id: p.id, v: p.total_m3, r: p.density_kg_m3, t: p.temperature_c, fr: !!p.fill_remaining })),
+    a: (res.allocations||[]).map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 }))
+  });
+  const sig = quickHash(sigBase);
+
+  const now = new Date();
+  const hdr = `STW v1 ${now.toISOString()} opt=${chosen?.id || 'min_k'} sig=${sig}`;
+  const lines = [
+    hdr,
+    `Tanks(${tanks.length}): ${tankTokens.join(' ')}`,
+    `Parcels(${parcels.length}): ${parcelTokens.join(' ')}`,
+    reverseLine ? reverseLine : null,
+    `Diag: P=${pwt} S=${swt} ${bstat} d%=${imb} warns=${wcount} errs=${ecount}`,
+    `Alloc(${allocTokens.length}): ${allocTokens.join(' ')}`,
+    traceTokens.length ? `Trace: ${traceTokens.join(' ')}` : null
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+// Export current scenario (compact text). Hold Shift to export previous full JSON.
+btnExportJson.addEventListener('click', async (ev) => {
+  try {
+    if (ev && ev.shiftKey) {
+      // Previous behavior: export verbose JSON for all plan options
+      if (!variantsCache) variantsCache = computeVariants();
+      const plans = {};
+      Object.entries(variantsCache).forEach(([key, entry]) => {
+        const { id, res } = entry;
+        plans[key] = { label: id, allocations: res.allocations || [], diagnostics: res.diagnostics || null };
+      });
+      const data = { tanks, parcels, plans };
+      const text = JSON.stringify(data, null, 2);
+      await navigator.clipboard.writeText(text);
+      alert('Copied ALL plan options JSON to clipboard.');
+      return;
+    }
+  } catch {}
+
+  const compact = buildCompactExportText();
+  try {
+    await navigator.clipboard.writeText(compact);
+    alert('Kısa çıktı panoya kopyalandı. (Shift = tam JSON)');
   } catch (e) {
-    console.log(text);
-    alert('Could not copy automatically. JSON printed to console.');
+    console.log(compact);
+    alert('Otomatik kopyalanamadı. Kısa çıktı console\'a yazdırıldı.');
   }
 });
 
