@@ -1686,72 +1686,65 @@ async function reverseSolveAndRun() {
   // If target is empty/zero/invalid, do not apply any max draft constraint; just run normal compute
   if (!isFinite(targetDraft) || targetDraft <= 0) { computeAndRender(); setActiveView('layout'); return; }
 
-  // If last parcel is Fill Remaining: search directly on that parcel's volume to meet target draft.
+  // If last parcel is Fill Remaining: implement user's simple TPC-guided mass iteration on FR parcel
   try {
     if (Array.isArray(parcels) && parcels.length > 0 && parcels[parcels.length - 1].fill_remaining) {
       const frIdx = parcels.length - 1;
       const frId = parcels[frIdx].id;
       const origParcels = parcels.map(p => ({ ...p }));
 
-      // Compute headroom for FR by allocating other (non-FR) parcels first with FR=0
+      // Capacity headroom for FR (with other parcels fixed)
       const pfixed = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? 0 : (p.total_m3 || 0)) }));
       const rFixed = computePlan(tanks, pfixed);
       const allocFixed = Array.isArray(rFixed.allocations) ? rFixed.allocations.filter(a => a.parcel_id !== frId) : [];
       const usedVolByTank = new Map();
       allocFixed.forEach(a => usedVolByTank.set(a.tank_id, (usedVolByTank.get(a.tank_id)||0) + (a.assigned_m3||0)));
-      // Sum headroom across included tanks
       const includedTanks = (tanks||[]).filter(t => t && t.included);
-      let Vhi = 0;
+      let Vcap = 0;
       includedTanks.forEach(t => {
         const cmax = (t.volume_m3||0) * (t.max_pct||0);
         const used = usedVolByTank.get(t.id) || 0;
         const head = Math.max(0, cmax - used);
-        Vhi += head;
+        Vcap += head;
       });
-      let Vlo = 0;
-      let Vbest = null;
-      for (let iter = 0; iter < 28; iter++) {
-        const V = (Vlo + Vhi) / 2;
+
+      // Start at capacity FR assignment
+      const rCap = computePlan(tanks, origParcels.map((p,i)=> ({ ...p, fill_remaining: (i===frIdx ? true : false) })));
+      const VcapAssigned = (rCap.allocations||[]).filter(a => a.parcel_id === frId).reduce((s,a)=> s + (a.assigned_m3||0), 0);
+      let V = Math.min(Vcap, VcapAssigned);
+      const rho_cargo = Number(origParcels[frIdx].density_kg_m3 || 1000);
+
+      for (let iter = 0; iter < 24; iter++) {
         const testParcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? V : (p.total_m3||0)) }));
-        // Evaluate base plan + alternatives; pick the one with best hydro under target
-        const base = computePlan(tanks, testParcels);
-        let candidates = [];
-        if (base && Array.isArray(base.allocations) && base.allocations.length && !(base?.diagnostics?.errors||[]).length) candidates.push(base);
-        try {
-          const alts = computePlanMinKAlternatives(tanks, testParcels, 8) || [];
-          for (const a of alts) {
-            if (a && Array.isArray(a.allocations) && a.allocations.length && !(a?.diagnostics?.errors||[]).length) candidates.push(a);
-          }
-        } catch {}
-        if (candidates.length === 0) { Vlo = V; continue; }
-        let best = null; let bestScore = Infinity; let bestM = null;
-        for (const cand of candidates) {
-          const m = computeHydroForAllocations(cand.allocations);
-          if (!m) continue;
-          const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
-          const trimAbs = Math.abs(m.Trim||0);
-          const diag = cand.diagnostics || {};
-          const pW = Number(diag.port_weight_mt || 0);
-          const sW = Number(diag.starboard_weight_mt || 0);
-          const psImb = (pW + sW) > 0 ? Math.abs(pW - sW) / (pW + sW) : 1;
-          const over = Math.max(0, maxT - targetDraft);
-          const under = Math.max(0, targetDraft - maxT);
-          // Penalize plans with one-sided load; prefer near-even keel and near target
-          const score = over > 1e-3 ? (over * 1000 + trimAbs + psImb * 100) : (under + trimAbs * 0.1 + psImb * 10);
-          if (score < bestScore) { bestScore = score; best = cand; bestM = m; }
+        const r = computePlan(tanks, testParcels);
+        const okAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0 && !(r?.diagnostics?.errors||[]).length;
+        if (!okAlloc) { V = (V + 0) / 2; continue; }
+        const m = computeHydroForAllocations(r.allocations);
+        if (!m) { V = (V + 0) / 2; continue; }
+        const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
+        if (Math.abs(maxT - targetDraft) <= 1e-3) {
+          parcels = testParcels; persistLastState(); computeAndRender(); setActiveView('layout'); return;
         }
-        if (!best || !bestM) { Vlo = V; continue; }
-        const maxTbest = Math.max(bestM.Tf||0, bestM.Tm||0, bestM.Ta||0);
-        if (maxTbest <= targetDraft + 1e-3) { Vbest = V; Vlo = V; } else { Vhi = V; }
+        // Guide next V using TPC at Tm
+        const Hm = interpHydro(HYDRO_ROWS, m.Tm || 0) || {};
+        const TPC = Number(Hm.TPC || 0); // t/cm
+        if (!isFinite(TPC) || TPC <= 0 || rho_cargo <= 0) {
+          // fallback: halve/double step with clamp
+          if (maxT > targetDraft) V = Math.max(0, V * 0.5); else V = Math.min(Vcap, V + (Vcap - V) * 0.5);
+          continue;
+        }
+        const dT = (targetDraft - maxT); // m
+        const dW = TPC * (dT * 100); // tons to add (if positive) or remove (if negative)
+        const dV = (dW * 1000) / rho_cargo; // m3
+        const Vnext = Math.max(0, Math.min(Vcap, V + dV));
+        if (Math.abs(Vnext - V) < 1e-3) { // cm-level no progress → stop
+          parcels = testParcels; persistLastState(); computeAndRender(); setActiveView('layout'); return;
+        }
+        V = Vnext;
       }
-      if (Vbest != null) {
-        parcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? Vbest : (p.total_m3||0)) }));
-        persistLastState();
-        computeAndRender();
-        setActiveView('layout');
-        return;
-      }
-      // If not found, fall through to generic logic
+      // After loop, accept last test V
+      parcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? V : (p.total_m3||0)) }));
+      persistLastState(); computeAndRender(); setActiveView('layout'); return;
     }
   } catch {}
 
