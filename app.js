@@ -1388,12 +1388,19 @@ async function ensureLCGMapLoaded() {
 
 function interpHydro(rows, T) {
   if (!rows || rows.length === 0 || !isFinite(T)) return null;
+  const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
+  const getDISFW = (r) => {
+    const fw = (r && typeof r.dis_fw === 'number') ? r.dis_fw : null;
+    if (isFinite(fw)) return fw;
+    const sw = (r && typeof r.dis_sw === 'number') ? r.dis_sw : null;
+    return isFinite(sw) ? (sw / rho_ref) : undefined;
+  };
   if (T <= rows[0].draft_m) return {
-    LCF: rows[0].lcf_m, LCB: rows[0].lcb_m, TPC: rows[0].tpc, MCT1cm: rows[0].mct, DIS_FW: rows[0].dis_fw
+    LCF: rows[0].lcf_m, LCB: rows[0].lcb_m, TPC: rows[0].tpc, MCT1cm: rows[0].mct, DIS_FW: getDISFW(rows[0])
   };
   if (T >= rows[rows.length - 1].draft_m) {
     const r = rows[rows.length - 1];
-    return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: r.dis_fw };
+    return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: getDISFW(r) };
   }
   let lo = 0, hi = rows.length - 1;
   while (hi - lo > 1) {
@@ -1403,15 +1410,20 @@ function interpHydro(rows, T) {
   const a = rows[lo], b = rows[hi];
   const t = (T - a.draft_m) / (b.draft_m - a.draft_m);
   const lerp = (x,y)=> x + (y - x) * t;
-  return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW: lerp(a.dis_fw, b.dis_fw) };
+  const aFW = getDISFW(a); const bFW = getDISFW(b);
+  const DIS_FW = (isFinite(aFW) && isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
+  return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW };
 }
 
 function solveDraftByDisFW(rows, target_dis_fw) {
   // rows: have draft_m and dis_fw (tons at ρ=1.0)
   if (!rows || rows.length === 0 || !isFinite(target_dis_fw)) return null;
+  const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
+  const toFW = (r) => (typeof r.dis_fw === 'number') ? r.dis_fw : ((typeof r.dis_sw === 'number') ? (r.dis_sw / rho_ref) : undefined);
   const seq = rows
-    .filter(r => isFinite(r.draft_m) && isFinite(r.dis_fw))
-    .map(r => ({ T: r.draft_m, Y: r.dis_fw }));
+    .filter(r => isFinite(r.draft_m))
+    .map(r => ({ T: r.draft_m, Y: toFW(r) }))
+    .filter(p => isFinite(p.Y));
   if (!seq.length) return null;
   if (target_dis_fw <= seq[0].Y) return seq[0].T;
   if (target_dis_fw >= seq[seq.length - 1].Y) return seq[seq.length - 1].T;
