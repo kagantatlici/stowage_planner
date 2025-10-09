@@ -1620,13 +1620,17 @@ function computeHydroForAllocations(allocations) {
   const H = interpHydro(HYDRO_ROWS, Tm);
   // Use LCB for trim moment, sign convention: stern trim (+)
   const LCB = (H && typeof H.LCB === 'number') ? H.LCB : 0;
-  const trim_cm = - (W * (LCG - LCB)) / (H?.MCT1cm || 1);
+  const MCT = (H && typeof H.MCT1cm === 'number' && H.MCT1cm !== 0) ? H.MCT1cm : null;
+  const trim_cm = (MCT ? ( - (W * (LCG - LCB)) / MCT ) : 0);
   const trim_m = trim_cm / 100.0;
-  const LBP = SHIP_PARAMS.LBP;
-  const dAP = (LBP/2) + (H?.LCF || 0);
-  const dFP = (LBP/2) - (H?.LCF || 0);
-  const Ta = Tm + trim_m * (dAP / LBP);
-  const Tf = Tm - trim_m * (dFP / LBP);
+  const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
+  let Tf = Tm, Ta = Tm;
+  if (LBP) {
+    const dAP = (LBP/2) + (H?.LCF || 0);
+    const dFP = (LBP/2) - (H?.LCF || 0);
+    Tf = Tm - trim_m * (dFP / LBP);
+    Ta = Tm + trim_m * (dAP / LBP);
+  }
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m };
 }
@@ -1688,8 +1692,13 @@ async function reverseSolveAndRun() {
   if (sBest <= 0) {
     // Fallback: if current parcels (e.g., Fill Remaining) at capacity already satisfy target, accept them
     try {
+      // Build a capacity plan: preserve fill_remaining flags if user had them
+      const capOld = parcels.map(p => ({ ...p }));
+      const withFR = capOld.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true, total_m3: p.total_m3 } : { ...p }));
+      parcels = withFR;
       const rCap = computePlan(tanks, parcels);
       const mCap = computeHydroForAllocations(rCap.allocations || []);
+      parcels = capOld; // restore
       if (mCap) {
         const maxT2 = Math.max(mCap.Tf || 0, mCap.Tm || 0, mCap.Ta || 0);
         if (maxT2 <= targetDraft + 1e-3) { computeAndRender(); setActiveView('layout'); return; }
