@@ -1287,11 +1287,21 @@ function buildCompactExportText() {
 
   const now = new Date();
   const hdr = `STW v1 ${now.toISOString()} opt=${chosen?.id || 'min_k'} sig=${sig}`;
+  // Hydro summary for export (if available)
+  let hydroLine = null;
+  try {
+    const m = computeHydroForAllocations(res.allocations || []);
+    if (m) {
+      const H = interpHydro(HYDRO_ROWS, m.Tm || 0) || {};
+      hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf||0).toFixed(3)} Tm=${(m.Tm||0).toFixed(3)} Ta=${(m.Ta||0).toFixed(3)} Trim=${(m.Trim||0).toFixed(3)} LCF=${isFinite(H.LCF)?H.LCF.toFixed(2):'-'} LBP=${isFinite(SHIP_PARAMS.LBP)?SHIP_PARAMS.LBP.toFixed(2):'-'} rho=${isFinite(getReverseInputs().rho)?String(getReverseInputs().rho):String(SHIP_PARAMS.RHO_REF)}`;
+    }
+  } catch {}
   const lines = [
     hdr,
     `Tanks(${tanks.length}): ${tankTokens.join(' ')}`,
     `Parcels(${parcels.length}): ${parcelTokens.join(' ')}`,
     reverseLine ? reverseLine : null,
+    hydroLine,
     `Diag: P=${pwt} S=${swt} ${bstat} d%=${imb} warns=${wcount} errs=${ecount}`,
     `Alloc(${allocTokens.length}): ${allocTokens.join(' ')}`,
     traceTokens.length ? `Trace: ${traceTokens.join(' ')}` : null
