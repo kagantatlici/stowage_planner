@@ -1,4 +1,4 @@
-import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall } from './engine/stowage.js?v=4';
+import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy } from './engine/stowage.js?v=4';
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
 // Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.
@@ -1700,8 +1700,8 @@ async function reverseSolveAndRun() {
       const v = (b ? b.v0 : 0) * s;
       return { ...p, total_m3: Number.isFinite(v) ? v : 0, fill_remaining: false };
     });
-    const r = computePlan(tanks, parcels);
-    const hasAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0;
+    let r = computePlan(tanks, parcels);
+    let hasAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0;
     const hasErr = !!(r?.diagnostics?.errors || []).length;
     let ok = false;
     if (hasAlloc && !hasErr) {
@@ -1711,6 +1711,21 @@ async function reverseSolveAndRun() {
         // Upper-bound constraint: accept any plan with max(F/M/A) <= target
         ok = (maxT <= targetDraft + 1e-3);
       }
+    }
+    // If no allocations at this scale due to per-tank mins, try relaxed band (allow underfill below min on up to 2 tanks)
+    if (!hasAlloc || hasErr) {
+      try {
+        const rRelax = computePlanMinKPolicy(tanks, parcels, { bandMinPctOverride: 0.0, bandSlotsLeftOverride: 2, aggressiveSingleWing: true });
+        if (rRelax && Array.isArray(rRelax.allocations) && rRelax.allocations.length) {
+          r = rRelax;
+          hasAlloc = true;
+          const m = computeHydroForAllocations(r.allocations);
+          if (m) {
+            const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
+            ok = (maxT <= targetDraft + 1e-3);
+          }
+        }
+      } catch {}
     }
     if (ok) { sBest = s; sLo = s; }
     else {

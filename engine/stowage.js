@@ -477,8 +477,8 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
 
   // Global options (user-approved)
   const bandEnabled = true;
-  const bandMinPct = 0.45; // 45%
-  let bandSlotsLeft = 1;   // at most 1 tank across entire plan
+  const bandMinPct = (typeof policy.bandMinPctOverride === 'number') ? policy.bandMinPctOverride : 0.45; // default 45%
+  let bandSlotsLeft = (typeof policy.bandSlotsLeftOverride === 'number') ? policy.bandSlotsLeftOverride : 1;   // default: 1 tank
   /** @type {Set<string>} */
   const bandUsedTankIds = new Set();
   const bufferEnabled = true;
@@ -1068,6 +1068,11 @@ export function computePlanMaxK(tanks, parcels) {
 
 export function computePlanMinKeepSlopsSmall(tanks, parcels) {
   return computePlanInternal(tanks, parcels, 'min_k', { hardReserveSlopsSmall: true });
+}
+
+// Expert: compute plan with custom policy (e.g., relaxed band minimums for upper-bound draft solve)
+export function computePlanMinKPolicy(tanks, parcels, policy) {
+  return computePlanInternal(tanks, parcels, 'min_k', policy || {});
 }
 
 // Enumerate alternative minimal-k plans: returns up to maxAlts results with different pair selections.
