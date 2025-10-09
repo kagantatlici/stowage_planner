@@ -1,8 +1,9 @@
 import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall } from './engine/stowage.js?v=4';
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
-const SHIP_PARAMS = { LBP: 171.2, RHO_REF: 1.025, LCG_FO_FW: -56.232 };
-const LIGHT_SHIP = { weight_mt: 9070, lcg: -9.85 };
+// Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.
+const SHIP_PARAMS = { LBP: null, RHO_REF: null, LCG_FO_FW: null };
+const LIGHT_SHIP = { weight_mt: null, lcg: null };
 let HYDRO_ROWS = null; // cached hydro rows from draft_calculator
 /** @type {Map<string, number>} */
 let TANK_LCG_MAP = new Map(); // map tank_id -> lcg (midship +forward)
@@ -597,8 +598,8 @@ function renderSummaryAndSvg(result) {
       hbox.style.display = 'block';
       hbox.innerHTML = `
         <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap:8px; font-size:13px;">
-          <div><div class="muted">Displacement (t)</div><div><b>${W_total.toFixed(1)}</b></div></div>
-          <div><div class="muted">DWT (t)</div><div><b>${DWT.toFixed(1)}</b></div></div>
+          <div><div class="muted">Displacement (t)</div><div><b>${isFinite(W_total)?W_total.toFixed(1):'-'}</b></div></div>
+          <div><div class="muted">DWT (t)</div><div><b>${isFinite(DWT)?DWT.toFixed(1):'-'}</b></div></div>
           <div><div class="muted">Draft Fwd (m)</div><div><b>${Tf.toFixed(3)}</b></div></div>
           <div><div class="muted">Draft Mean (m)</div><div><b>${Tm.toFixed(3)}</b></div></div>
           <div><div class="muted">Draft Aft (m)</div><div><b>${Ta.toFixed(3)}</b></div></div>
@@ -1555,7 +1556,7 @@ function getReverseInputs() {
   };
   return {
     targetDraft: parseNum(rsTargetDraftEl, NaN),
-    rho: parseNum(rsRhoEl, SHIP_PARAMS.RHO_REF),
+    rho: parseNum(rsRhoEl, (SHIP_PARAMS.RHO_REF != null ? SHIP_PARAMS.RHO_REF : NaN)),
     fo: parseNum(rsFoEl, 0),
     fw: parseNum(rsFwEl, 0),
     oth: parseNum(rsOthEl, 0),
@@ -1580,11 +1581,14 @@ function computeHydroForAllocations(allocations) {
   // consumables
   const consLCG = SHIP_PARAMS.LCG_FO_FW;
   const consW = (fo||0) + (fw||0) + (oth||0);
-  W += consW; Mx += consW * consLCG;
+  W += consW;
+  if (isFinite(consLCG)) Mx += consW * consLCG;
   // constant
   if (constW && isFinite(constX)) { W += constW; Mx += constW * constX; }
   // lightship
-  W += LIGHT_SHIP.weight_mt; Mx += LIGHT_SHIP.weight_mt * LIGHT_SHIP.lcg;
+  if (isFinite(LIGHT_SHIP.weight_mt)) {
+    W += LIGHT_SHIP.weight_mt; if (isFinite(LIGHT_SHIP.lcg)) Mx += LIGHT_SHIP.weight_mt * LIGHT_SHIP.lcg;
+  }
   if (!(W > 0)) return null;
   const LCG = Mx / W;
   const Tm = solveDraftByDisFW(HYDRO_ROWS, W / rho);
@@ -1599,7 +1603,7 @@ function computeHydroForAllocations(allocations) {
   const dFP = (LBP/2) - (H?.LCF || 0);
   const Ta = Tm + trim_m * (dAP / LBP);
   const Tf = Tm - trim_m * (dFP / LBP);
-  const DWT = W - LIGHT_SHIP.weight_mt;
+  const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m };
 }
 
