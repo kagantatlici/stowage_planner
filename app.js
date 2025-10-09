@@ -1685,6 +1685,50 @@ async function reverseSolveAndRun() {
   const { targetDraft, rho } = getReverseInputs();
   // If target is empty/zero/invalid, do not apply any max draft constraint; just run normal compute
   if (!isFinite(targetDraft) || targetDraft <= 0) { computeAndRender(); setActiveView('layout'); return; }
+
+  // NEW: Capacity-first upper-bound logic (simple and monotonic)
+  try {
+    const origParcels = parcels.map(p => ({ ...p }));
+    const capParcels = origParcels.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true } : { ...p }));
+    const capRes = computePlan(tanks, capParcels);
+    const capHydro = computeHydroForAllocations(capRes.allocations || []);
+    if (capHydro) {
+      const maxTcap = Math.max(capHydro.Tf||0, capHydro.Tm||0, capHydro.Ta||0);
+      if (maxTcap <= targetDraft + 1e-3) {
+        parcels = capParcels;
+        persistLastState();
+        computeAndRender();
+        setActiveView('layout');
+        return;
+      }
+      // Build base volumes by parcel from capacity plan
+      const baseVolMap = new Map();
+      (capRes.allocations || []).forEach(a => {
+        baseVolMap.set(a.parcel_id, (baseVolMap.get(a.parcel_id)||0) + (a.assigned_m3||0));
+      });
+      if ((capRes.allocations||[]).length > 0) {
+        let sLo = 0.0, sHi = 1.0, sBest = null;
+        for (let iter = 0; iter < 28; iter++) {
+          const s = (sLo + sHi) / 2;
+          const testParcels = origParcels.map(p => ({ ...p, fill_remaining: false, total_m3: Number.isFinite(baseVolMap.get(p.id)) ? baseVolMap.get(p.id) * s : 0 }));
+          const r = computePlan(tanks, testParcels);
+          const okAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0 && !(r?.diagnostics?.errors||[]).length;
+          if (!okAlloc) { sLo = s; continue; }
+          const m = computeHydroForAllocations(r.allocations);
+          if (!m) { sLo = s; continue; }
+          const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
+          if (maxT <= targetDraft + 1e-3) { sBest = s; sLo = s; } else { sHi = s; }
+        }
+        if (sBest != null) {
+          parcels = origParcels.map(p => ({ ...p, fill_remaining: false, total_m3: Number.isFinite(baseVolMap.get(p.id)) ? baseVolMap.get(p.id) * sBest : 0 }));
+          persistLastState();
+          computeAndRender();
+          setActiveView('layout');
+          return;
+        }
+      }
+    }
+  } catch {}
   // Compute target displacement at given draft
   const Ht = interpHydro(HYDRO_ROWS, targetDraft);
   if (!Ht || !isFinite(Ht.DIS_FW)) { alert('Hydro table missing DIS(FW).'); return; }
