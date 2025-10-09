@@ -114,6 +114,35 @@ function refreshPresetSelect() {
   } catch {}
   cfgSelect.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
 }
+
+function applySelectionValue(value) {
+  if (!value) return false;
+  if (value.startsWith('dc:')) {
+    const id = value.slice(3);
+    if (!id) return false;
+    if (loadDCShip(id)) {
+      try { cfgNameInput.value = getDCShipName(id) || id; } catch {}
+      persistLastState();
+      render();
+      return true;
+    }
+    return false;
+  }
+  if (value.startsWith('preset:')) {
+    const name = value.slice(7);
+    const presets = loadPresets();
+    const conf = presets[name];
+    if (!Array.isArray(conf)) return false;
+    tanks = conf.map(t => ({ ...t }));
+    try { cfgNameInput.value = name; } catch {}
+    // Apply ship meta for this preset if available
+    try { const meta = (typeof loadShipMeta === 'function') ? loadShipMeta()[name] : null; if (meta) applyShipMeta(meta); } catch {}
+    persistLastState();
+    render();
+    return true;
+  }
+  return false;
+}
 function persistLastState() {
   localStorage.setItem(LS_LAST, JSON.stringify({ tanks, parcels }));
 }
@@ -471,10 +500,13 @@ function renderTankEditor() {
 
 function renderParcelEditor() {
   const rows = parcels.map((p, idx) => {
+    const dens = Number(p.density_kg_m3 || 0);
+    const wt = isFinite(dens) && dens > 0 && isFinite(p.total_m3) ? (p.total_m3 * dens / 1000) : '';
     return `<tr>
       <td><input value="${p.id}" data-idx="${idx}" data-field="id" style="width:70px"/></td>
       <td><input value="${p.name}" data-idx="${idx}" data-field="name" style="width:120px"/></td>
       <td><input type="number" step="0.001" min="0" value="${p.total_m3 != null ? Number(p.total_m3).toFixed(3) : ''}" data-idx="${idx}" data-field="total_m3" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
+      <td><input type="number" step="0.1" min="0" value="${wt!=='' ? Number(wt).toFixed(1) : ''}" data-idx="${idx}" data-field="weight_mt" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
       <td><input type="checkbox" ${p.fill_remaining?'checked':''} data-idx="${idx}" data-field="fill_remaining" ${idx===parcels.length-1 ? '' : 'disabled'}/></td>
       <td><input type="number" step="0.001" min="0" value="${((p.density_kg_m3||0)/1000).toFixed(3)}" data-idx="${idx}" data-field="density_g_cm3" style="width:80px"/></td>
       <td><input type="number" step="1" value="${p.temperature_c}" data-idx="${idx}" data-field="temperature_c" style="width:70px"/></td>
@@ -485,7 +517,7 @@ function renderParcelEditor() {
   parcelEditorEl.innerHTML = `
     <table>
       <thead>
-        <tr><th>Parcel No.</th><th>Name</th><th>Total (m³)</th><th>Fill Remaining</th><th>Density (g/cm³)</th><th>T (°C)</th><th>Color</th><th></th></tr>
+        <tr><th>Parcel No.</th><th>Name</th><th>Total (m³)</th><th>Weight (t)</th><th>Fill Remaining</th><th>Density (g/cm³)</th><th>T (°C)</th><th>Color</th><th></th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -506,6 +538,18 @@ function renderParcelEditor() {
       if (field === 'total_m3') {
         const txt = String(val).replace(',', '.');
         val = txt === '' ? undefined : Number(txt);
+      }
+      if (field === 'weight_mt') {
+        const txt = String(val).replace(',', '.');
+        const w = Number(txt);
+        const dens = Number(parcels[idx].density_kg_m3 || 0);
+        if (isFinite(w) && isFinite(dens) && dens > 0) {
+          const vol = (w * 1000) / dens; // m3
+          parcels[idx] = { ...parcels[idx], total_m3: vol };
+          persistLastState();
+          render();
+          return;
+        }
       }
       // Ensure unique parcel IDs; auto-adjust duplicates
       if (field === 'id') {
@@ -1080,6 +1124,13 @@ if (!restored) {
   if (!loaded) autoLoadFirstPresetIfExists();
 }
 
+// If dropdown already has a selection, apply it as active ship on load
+try {
+  if (cfgSelect && cfgSelect.value) {
+    applySelectionValue(cfgSelect.value);
+  }
+} catch {}
+
 render();
 // Restore last view or default to cargo
 try {
@@ -1129,28 +1180,7 @@ if (cfgSelect) {
   cfgSelect.addEventListener('change', () => {
     const value = cfgSelect.value;
     if (!value) return;
-    if (value.startsWith('dc:')) {
-      const id = value.slice(3);
-      if (!id) return;
-      if (loadDCShip(id)) {
-        try { cfgNameInput.value = getDCShipName(id) || id; } catch {}
-        persistLastState();
-        render();
-      }
-      return;
-    }
-    if (value.startsWith('preset:')) {
-      const name = value.slice(7);
-      const presets = loadPresets();
-      const conf = presets[name];
-      if (!Array.isArray(conf)) return;
-      tanks = conf.map(t => ({ ...t }));
-      try { cfgNameInput.value = name; } catch {}
-      // Apply ship meta for this preset if available
-      try { const meta = (typeof loadShipMeta === 'function') ? loadShipMeta()[name] : null; if (meta) applyShipMeta(meta); } catch {}
-      persistLastState();
-      render();
-    }
+    applySelectionValue(value);
   });
 }
 
@@ -1714,6 +1744,28 @@ async function reverseSolveAndRun() {
     return { ...p, total_m3: Number.isFinite(v) ? v : 0, fill_remaining: false };
   });
   persistLastState();
+  // If still below target and not all tanks full, try to increase by allowing the last parcel to fill remaining up to capacity
+  try {
+    const rBest = computePlan(tanks, parcels);
+    const mBest = computeHydroForAllocations(rBest.allocations || []);
+    if (mBest) {
+      const maxT = Math.max(mBest.Tf||0, mBest.Tm||0, mBest.Ta||0);
+      if (maxT < targetDraft - 1e-3) {
+        const capOld = parcels.map(p => ({ ...p }));
+        const withFR = capOld.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true, total_m3: p.total_m3 } : { ...p }));
+        parcels = withFR;
+        const rUp = computePlan(tanks, parcels);
+        const mUp = computeHydroForAllocations(rUp.allocations || []);
+        parcels = capOld;
+        if (mUp) {
+          const maxUp = Math.max(mUp.Tf||0, mUp.Tm||0, mUp.Ta||0);
+          if (maxUp <= targetDraft + 1e-3) {
+            parcels = withFR;
+          }
+        }
+      }
+    }
+  } catch {}
   computeAndRender();
   setActiveView('layout');
 }

@@ -49,31 +49,31 @@
           <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; align-items:end;">
             <label>
               Target Max Draft (m)
-              <input id="rs_target_draft" type="number" step="0.01" placeholder="e.g. 13.00" />
+              <input id="rs_target_draft" type="number" step="0.01" value="10.5" />
             </label>
             <label>
               Water Density ρ (t/m³)
-              <input id="rs_rho" type="text" inputmode="decimal" placeholder="1.025" />
+              <input id="rs_rho" type="text" inputmode="decimal" value="1.025" />
             </label>
             <label>
               FO (t)
-              <input id="rs_fo_mt" type="number" step="0.1" placeholder="0" />
+              <input id="rs_fo_mt" type="number" step="0.1" value="0" />
             </label>
             <label>
               FW (t)
-              <input id="rs_fw_mt" type="number" step="0.1" placeholder="0" />
+              <input id="rs_fw_mt" type="number" step="0.1" value="0" />
             </label>
             <label>
               Others (t)
-              <input id="rs_oth_mt" type="number" step="0.1" placeholder="0" />
+              <input id="rs_oth_mt" type="number" step="0.1" value="0" />
             </label>
             <label>
               Constant (t)
-              <input id="rs_const_mt" type="number" step="0.1" placeholder="0" />
+              <input id="rs_const_mt" type="number" step="0.1" value="0" />
             </label>
             <label>
               Constant L.C.G. (m)
-              <input id="rs_const_lcg" type="number" step="0.01" placeholder="0.00" />
+              <input id="rs_const_lcg" type="number" step="0.01" value="0" />
             </label>
             <div>
               <button id="btn-solve-draft" class="btn-primary">Solve From Draft & Run</button>
