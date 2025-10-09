@@ -1730,9 +1730,14 @@ async function reverseSolveAndRun() {
           if (!m) continue;
           const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
           const trimAbs = Math.abs(m.Trim||0);
+          const diag = cand.diagnostics || {};
+          const pW = Number(diag.port_weight_mt || 0);
+          const sW = Number(diag.starboard_weight_mt || 0);
+          const psImb = (pW + sW) > 0 ? Math.abs(pW - sW) / (pW + sW) : 1;
           const over = Math.max(0, maxT - targetDraft);
           const under = Math.max(0, targetDraft - maxT);
-          const score = over > 1e-3 ? (over * 1000 + trimAbs) : (under + trimAbs * 0.1);
+          // Penalize plans with one-sided load; prefer near-even keel and near target
+          const score = over > 1e-3 ? (over * 1000 + trimAbs + psImb * 100) : (under + trimAbs * 0.1 + psImb * 10);
           if (score < bestScore) { bestScore = score; best = cand; bestM = m; }
         }
         if (!best || !bestM) { Vlo = V; continue; }
