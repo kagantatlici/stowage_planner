@@ -550,10 +550,14 @@ function liters(n) { return Number(n).toLocaleString(undefined, { maximumFractio
 
 function renderActiveShipInfo() {
   if (!activeShipEl) return;
-  const lbp = (SHIP_PARAMS && isFinite(SHIP_PARAMS.LBP)) ? SHIP_PARAMS.LBP.toFixed(2) : '-';
-  const rho = (SHIP_PARAMS && isFinite(SHIP_PARAMS.RHO_REF)) ? String(SHIP_PARAMS.RHO_REF) : '-';
-  const lsW = (LIGHT_SHIP && isFinite(LIGHT_SHIP.weight_mt)) ? LIGHT_SHIP.weight_mt.toFixed(0) : '-';
-  const lsX = (LIGHT_SHIP && isFinite(LIGHT_SHIP.lcg)) ? LIGHT_SHIP.lcg.toFixed(2) : '-';
+  const lbpNum = (SHIP_PARAMS && typeof SHIP_PARAMS.LBP === 'number') ? SHIP_PARAMS.LBP : NaN;
+  const rhoNum = (SHIP_PARAMS && typeof SHIP_PARAMS.RHO_REF === 'number') ? SHIP_PARAMS.RHO_REF : NaN;
+  const lsWNum = (LIGHT_SHIP && typeof LIGHT_SHIP.weight_mt === 'number') ? LIGHT_SHIP.weight_mt : NaN;
+  const lsXNum = (LIGHT_SHIP && typeof LIGHT_SHIP.lcg === 'number') ? LIGHT_SHIP.lcg : NaN;
+  const lbp = Number.isFinite(lbpNum) ? lbpNum.toFixed(2) : '-';
+  const rho = Number.isFinite(rhoNum) ? String(rhoNum) : '-';
+  const lsW = Number.isFinite(lsWNum) ? lsWNum.toFixed(0) : '-';
+  const lsX = Number.isFinite(lsXNum) ? lsXNum.toFixed(2) : '-';
   const hRows = (HYDRO_ROWS && HYDRO_ROWS.length) ? HYDRO_ROWS.length : 0;
   const any = (lbp !== '-' || rho !== '-' || lsW !== '-' || hRows > 0);
   if (!any) { activeShipEl.style.display = 'none'; activeShipEl.innerHTML = ''; return; }
