@@ -81,9 +81,24 @@ function saveShipMeta(m) {
   localStorage.setItem(LS_SHIP_META, JSON.stringify(m || {}));
 }
 function refreshPresetSelect() {
-  const presets = loadPresets();
-  const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
-  cfgSelect.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
+  const options = [];
+  // Prefer Draft Calculator ships if present (shared origin localStorage)
+  try {
+    const dcIdxRaw = localStorage.getItem('dc_ships_index');
+    const dcIdx = dcIdxRaw ? JSON.parse(dcIdxRaw) : [];
+    if (Array.isArray(dcIdx) && dcIdx.length > 0) {
+      dcIdx.forEach(entry => {
+        if (entry && entry.id) options.push({ value: `dc:${entry.id}`, label: entry.name || entry.id });
+      });
+    }
+  } catch {}
+  // Fall back to local presets
+  try {
+    const presets = loadPresets();
+    const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
+    names.forEach(n => options.push({ value: `preset:${n}`, label: n }));
+  } catch {}
+  cfgSelect.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
 }
 function persistLastState() {
   localStorage.setItem(LS_LAST, JSON.stringify({ tanks, parcels }));
@@ -1005,7 +1020,19 @@ function autoLoadFirstPresetIfExists() {
 }
 
 if (!restored) {
-  autoLoadFirstPresetIfExists();
+  // Try DC active ship first
+  let loaded = false;
+  try {
+    const active = localStorage.getItem('dc_active_ship');
+    if (active) {
+      const ok = loadDCShip(active);
+      if (ok) {
+        try { cfgSelect.value = `dc:${active}`; cfgNameInput.value = (getDCShipName(active) || active); } catch {}
+        loaded = true;
+      }
+    }
+  } catch {}
+  if (!loaded) autoLoadFirstPresetIfExists();
 }
 
 render();
@@ -1047,18 +1074,58 @@ btnSaveCfg.addEventListener('click', () => {
 // Change selected preset -> immediately load into Tank Editor
 if (cfgSelect) {
   cfgSelect.addEventListener('change', () => {
-    const name = cfgSelect.value;
-    if (!name) return;
-    const presets = loadPresets();
-    const conf = presets[name];
-    if (!Array.isArray(conf)) return;
-    tanks = conf.map(t => ({ ...t }));
-    try { cfgNameInput.value = name; } catch {}
-    // Apply ship meta for this preset if available
-    try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch {}
-    persistLastState();
-    render();
+    const value = cfgSelect.value;
+    if (!value) return;
+    if (value.startsWith('dc:')) {
+      const id = value.slice(3);
+      if (!id) return;
+      if (loadDCShip(id)) {
+        try { cfgNameInput.value = getDCShipName(id) || id; } catch {}
+        persistLastState();
+        render();
+      }
+      return;
+    }
+    if (value.startsWith('preset:')) {
+      const name = value.slice(7);
+      const presets = loadPresets();
+      const conf = presets[name];
+      if (!Array.isArray(conf)) return;
+      tanks = conf.map(t => ({ ...t }));
+      try { cfgNameInput.value = name; } catch {}
+      // Apply ship meta for this preset if available
+      try { const meta = (typeof loadShipMeta === 'function') ? loadShipMeta()[name] : null; if (meta) applyShipMeta(meta); } catch {}
+      persistLastState();
+      render();
+    }
   });
+}
+
+function getDCShipName(id) {
+  try {
+    const idxRaw = localStorage.getItem('dc_ships_index');
+    const idx = idxRaw ? JSON.parse(idxRaw) : [];
+    const e = Array.isArray(idx) ? idx.find(x => x && x.id === id) : null;
+    return e ? (e.name || id) : id;
+  } catch { return id; }
+}
+
+function loadDCShip(id) {
+  try {
+    const raw = localStorage.getItem('dc_ship_' + id);
+    if (!raw) return false;
+    const prof = JSON.parse(raw);
+    // Extract meta and apply
+    const meta = extractShipMetaFromProfile(prof);
+    if (meta) applyShipMeta(meta);
+    // Build tanks from cargo list
+    const cargoArr = (prof && prof.tanks && Array.isArray(prof.tanks.cargo)) ? prof.tanks.cargo : [];
+    const arr = mapCargoArrayToTanks(cargoArr, { min_pct: 0.5, max_pct: 0.98 });
+    if (arr && arr.length) tanks = arr.map(t => ({ ...t }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 // Load now imports JSON via file chooser and updates only capacities
 btnLoadCfg.addEventListener('click', () => {
