@@ -1713,13 +1713,31 @@ async function reverseSolveAndRun() {
       for (let iter = 0; iter < 28; iter++) {
         const V = (Vlo + Vhi) / 2;
         const testParcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? V : (p.total_m3||0)) }));
-        const r = computePlan(tanks, testParcels);
-        const okAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0 && !(r?.diagnostics?.errors||[]).length;
-        if (!okAlloc) { Vlo = V; continue; }
-        const m = computeHydroForAllocations(r.allocations);
-        if (!m) { Vlo = V; continue; }
-        const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
-        if (maxT <= targetDraft + 1e-3) { Vbest = V; Vlo = V; } else { Vhi = V; }
+        // Evaluate base plan + alternatives; pick the one with best hydro under target
+        const base = computePlan(tanks, testParcels);
+        let candidates = [];
+        if (base && Array.isArray(base.allocations) && base.allocations.length && !(base?.diagnostics?.errors||[]).length) candidates.push(base);
+        try {
+          const alts = computePlanMinKAlternatives(tanks, testParcels, 8) || [];
+          for (const a of alts) {
+            if (a && Array.isArray(a.allocations) && a.allocations.length && !(a?.diagnostics?.errors||[]).length) candidates.push(a);
+          }
+        } catch {}
+        if (candidates.length === 0) { Vlo = V; continue; }
+        let best = null; let bestScore = Infinity; let bestM = null;
+        for (const cand of candidates) {
+          const m = computeHydroForAllocations(cand.allocations);
+          if (!m) continue;
+          const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
+          const trimAbs = Math.abs(m.Trim||0);
+          const over = Math.max(0, maxT - targetDraft);
+          const under = Math.max(0, targetDraft - maxT);
+          const score = over > 1e-3 ? (over * 1000 + trimAbs) : (under + trimAbs * 0.1);
+          if (score < bestScore) { bestScore = score; best = cand; bestM = m; }
+        }
+        if (!best || !bestM) { Vlo = V; continue; }
+        const maxTbest = Math.max(bestM.Tf||0, bestM.Tm||0, bestM.Ta||0);
+        if (maxTbest <= targetDraft + 1e-3) { Vbest = V; Vlo = V; } else { Vhi = V; }
       }
       if (Vbest != null) {
         parcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? Vbest : (p.total_m3||0)) }));
