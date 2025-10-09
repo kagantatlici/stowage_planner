@@ -1712,17 +1712,21 @@ async function reverseSolveAndRun() {
         ok = (maxT <= targetDraft + 1e-3);
       }
     }
-    // If no allocations at this scale due to per-tank mins, try relaxed band (allow underfill below min on up to 2 tanks)
+    // If no allocations at this scale due to per-tank mins, try relaxed band (progressively allow underfill)
     if (!hasAlloc || hasErr) {
       try {
-        const rRelax = computePlanMinKPolicy(tanks, parcels, { bandMinPctOverride: 0.0, bandSlotsLeftOverride: 2, aggressiveSingleWing: true });
-        if (rRelax && Array.isArray(rRelax.allocations) && rRelax.allocations.length) {
-          r = rRelax;
-          hasAlloc = true;
-          const m = computeHydroForAllocations(r.allocations);
-          if (m) {
-            const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
-            ok = (maxT <= targetDraft + 1e-3);
+        const tries = [2, 6, 999];
+        for (const slots of tries) {
+          const rRelax = computePlanMinKPolicy(tanks, parcels, { bandMinPctOverride: 0.0, bandSlotsLeftOverride: slots, aggressiveSingleWing: true });
+          if (rRelax && Array.isArray(rRelax.allocations) && rRelax.allocations.length) {
+            r = rRelax;
+            hasAlloc = true;
+            const m = computeHydroForAllocations(r.allocations);
+            if (m) {
+              const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
+              ok = (maxT <= targetDraft + 1e-3);
+            }
+            break;
           }
         }
       } catch {}
@@ -1742,8 +1746,13 @@ async function reverseSolveAndRun() {
       const capOld = parcels.map(p => ({ ...p }));
       const withFR = capOld.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true, total_m3: p.total_m3 } : { ...p }));
       parcels = withFR;
-      const rCap = computePlan(tanks, parcels);
-      const mCap = computeHydroForAllocations(rCap.allocations || []);
+      let rCap = computePlan(tanks, parcels);
+      let mCap = computeHydroForAllocations(rCap.allocations || []);
+      // If still no alloc due to mins, try relaxed policy at capacity too
+      if (!mCap || !(rCap.allocations||[]).length) {
+        rCap = computePlanMinKPolicy(tanks, parcels, { bandMinPctOverride: 0.0, bandSlotsLeftOverride: 999, aggressiveSingleWing: true });
+        mCap = computeHydroForAllocations(rCap.allocations || []);
+      }
       parcels = capOld; // restore
       if (mCap) {
         const maxT2 = Math.max(mCap.Tf || 0, mCap.Tm || 0, mCap.Ta || 0);
