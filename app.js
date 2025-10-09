@@ -1666,21 +1666,38 @@ async function reverseSolveAndRun() {
       return { ...p, total_m3: Number.isFinite(v) ? v : 0, fill_remaining: false };
     });
     const r = computePlan(tanks, parcels);
-    let ok = r && r.allocations && r.allocations.length > 0 && (!r.diagnostics || !(r.diagnostics.errors||[]).length);
-    if (ok) {
+    const hasAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0;
+    const hasErr = !!(r?.diagnostics?.errors || []).length;
+    let ok = false;
+    if (hasAlloc && !hasErr) {
       const m = computeHydroForAllocations(r.allocations);
-      if (!m) { ok = false; }
-      else {
+      if (m) {
         const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
-        // Enforce max(F/M/A) <= target draft (with small tolerance)
-        if (maxT > targetDraft + 1e-3) ok = false;
+        // Upper-bound constraint: accept any plan with max(F/M/A) <= target
+        ok = (maxT <= targetDraft + 1e-3);
       }
     }
-    if (ok) { sBest = s; sLo = s; } else { sHi = s; }
+    if (ok) { sBest = s; sLo = s; }
+    else {
+      // If no allocations (below per-tank min cap), move upward; otherwise drafts too high → move downward
+      if (!hasAlloc || hasErr) sLo = s; else sHi = s;
+    }
     // restore for next iteration
     parcels = old;
   }
-  if (sBest <= 0) { alert('No feasible distribution under tank limits for the target draft. Try lowering target draft or adjust limits.'); return; }
+  if (sBest <= 0) {
+    // Fallback: if current parcels (e.g., Fill Remaining) at capacity already satisfy target, accept them
+    try {
+      const rCap = computePlan(tanks, parcels);
+      const mCap = computeHydroForAllocations(rCap.allocations || []);
+      if (mCap) {
+        const maxT2 = Math.max(mCap.Tf || 0, mCap.Tm || 0, mCap.Ta || 0);
+        if (maxT2 <= targetDraft + 1e-3) { computeAndRender(); setActiveView('layout'); return; }
+      }
+    } catch {}
+    alert('No feasible distribution under tank limits for the target draft. Try lowering target draft or adjust limits.');
+    return;
+  }
   // Apply best volumes and run variants
   parcels = parcels.map(p => {
     const b = baseVolumes.find(r => r.id === p.id);
