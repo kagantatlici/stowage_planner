@@ -934,6 +934,7 @@ function renderSummaryAndSvg(result) {
 }
 
 let variantsCache = null;
+let solvingUpperBound = false;
 let selectedVariantKey = 'min_k';
 
 function computeVariants() {
@@ -1010,6 +1011,18 @@ function fillVariantSelect() {
 }
 
 function computeAndRender() {
+  // If user set a target draft and last parcel is Fill Remaining,
+  // interpret as "max cargo under target" and run upper-bound solver automatically.
+  try {
+    const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
+    const target = inputs ? inputs.targetDraft : NaN;
+    const fr = Array.isArray(parcels) && parcels.length > 0 ? !!parcels[parcels.length - 1].fill_remaining : false;
+    if (!solvingUpperBound && isFinite(target) && target > 0 && fr) {
+      solvingUpperBound = true;
+      reverseSolveAndRun().finally(() => { solvingUpperBound = false; });
+      return;
+    }
+  } catch {}
   variantsCache = computeVariants();
   // If target draft is provided, filter variants that violate max(F/M/A) > target
   try {
