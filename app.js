@@ -1670,7 +1670,8 @@ async function reverseSolveAndRun() {
   await ensureLCGMapLoaded();
   if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) { alert('Hydrostatics not found. Ensure draft_calculator/data/hydrostatics.json is present.'); return; }
   const { targetDraft, rho } = getReverseInputs();
-  if (!isFinite(targetDraft) || targetDraft <= 0) { alert('Enter a valid Target Max Draft'); return; }
+  // If target is empty/zero/invalid, do not apply any max draft constraint; just run normal compute
+  if (!isFinite(targetDraft) || targetDraft <= 0) { computeAndRender(); setActiveView('layout'); return; }
   // Compute target displacement at given draft
   const Ht = interpHydro(HYDRO_ROWS, targetDraft);
   if (!Ht || !isFinite(Ht.DIS_FW)) { alert('Hydro table missing DIS(FW).'); return; }
