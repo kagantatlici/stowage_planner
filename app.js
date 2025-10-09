@@ -293,13 +293,21 @@ function extractShipMetaFromProfile(profile) {
     const p = convertProfileLongitudes(JSON.parse(JSON.stringify(profile)));
     const name = p.ship.name || p.ship.id || 'Ship';
     const meta = { name };
-    if (isFinite(p.ship.lbp)) meta.lbp = Number(p.ship.lbp);
-    if (isFinite(p.ship.rho_ref)) meta.rho_ref = Number(p.ship.rho_ref);
-    if (p.ship.light_ship && isFinite(p.ship.light_ship.weight) && isFinite(p.ship.light_ship.lcg)) {
-      meta.light_ship = { weight_mt: Number(p.ship.light_ship.weight), lcg: Number(p.ship.light_ship.lcg) };
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+    // LBP (robust keys)
+    meta.lbp = num(p.ship.lbp ?? p.ship.LBP ?? p.LBP ?? undefined);
+    // rho_ref
+    meta.rho_ref = num(p.ship.rho_ref ?? p.ship.rhoRef ?? p.ship.rho ?? undefined);
+    // Light ship
+    const ls = p.ship.light_ship || p.ship.lightShip || p.LIGHT_SHIP || null;
+    if (ls && num(ls.weight) != null && num(ls.lcg) != null) {
+      meta.light_ship = { weight_mt: num(ls.weight), lcg: num(ls.lcg) };
     }
+    // Hydro rows (accept both {rows:[]} and [] shapes)
     if (p.hydrostatics && Array.isArray(p.hydrostatics.rows)) {
       meta.hydrostatics = { rows: p.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m) };
+    } else if (Array.isArray(p.hydrostatics)) {
+      meta.hydrostatics = { rows: p.hydrostatics.slice().sort((a,b)=>a.draft_m-b.draft_m) };
     }
     // Build tank LCG map for cargo/slops
     const tank_lcgs = {};
