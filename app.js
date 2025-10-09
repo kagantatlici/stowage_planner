@@ -21,6 +21,7 @@ const btnCompute = document.getElementById('btn-compute');
 // Demo load buttons removed from UI
 const btnAddParcel = document.getElementById('btn-add-parcel');
 const btnAddCenter = document.getElementById('btn-add-center');
+const activeShipEl = document.getElementById('active-ship');
 const summaryEl = document.getElementById('summary');
 const svgContainer = document.getElementById('svg-container');
 const layoutGrid = document.getElementById('layout-grid');
@@ -547,6 +548,24 @@ function renderParcelEditor() {
 
 function liters(n) { return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
 
+function renderActiveShipInfo() {
+  if (!activeShipEl) return;
+  const lbp = (SHIP_PARAMS && isFinite(SHIP_PARAMS.LBP)) ? SHIP_PARAMS.LBP.toFixed(2) : '-';
+  const rho = (SHIP_PARAMS && isFinite(SHIP_PARAMS.RHO_REF)) ? String(SHIP_PARAMS.RHO_REF) : '-';
+  const lsW = (LIGHT_SHIP && isFinite(LIGHT_SHIP.weight_mt)) ? LIGHT_SHIP.weight_mt.toFixed(0) : '-';
+  const lsX = (LIGHT_SHIP && isFinite(LIGHT_SHIP.lcg)) ? LIGHT_SHIP.lcg.toFixed(2) : '-';
+  const hRows = (HYDRO_ROWS && HYDRO_ROWS.length) ? HYDRO_ROWS.length : 0;
+  const any = (lbp !== '-' || rho !== '-' || lsW !== '-' || hRows > 0);
+  if (!any) { activeShipEl.style.display = 'none'; activeShipEl.innerHTML = ''; return; }
+  activeShipEl.style.display = 'block';
+  activeShipEl.innerHTML = `
+    <div>LBP <b>${lbp}</b> m</div>
+    <div>ρ_ref <b>${rho}</b> t/m³</div>
+    <div>Light Ship <b>${lsW}</b> t @ <b>${lsX}</b> m</div>
+    <div>Hydro Rows <b>${hRows}</b></div>
+  `;
+}
+
 function renderSummaryAndSvg(result) {
   if (summaryEl) summaryEl.innerHTML = '';
   if (svgContainer) svgContainer.innerHTML = '';
@@ -990,6 +1009,7 @@ function render() {
   renderParcelEditor();
   // Live layout preview based on current tank config
   renderSummaryAndSvg(null);
+  renderActiveShipInfo();
 }
 
 btnCompute.addEventListener('click', computeAndRender);
