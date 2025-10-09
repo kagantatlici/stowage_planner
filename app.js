@@ -1686,6 +1686,52 @@ async function reverseSolveAndRun() {
   // If target is empty/zero/invalid, do not apply any max draft constraint; just run normal compute
   if (!isFinite(targetDraft) || targetDraft <= 0) { computeAndRender(); setActiveView('layout'); return; }
 
+  // If last parcel is Fill Remaining: search directly on that parcel's volume to meet target draft.
+  try {
+    if (Array.isArray(parcels) && parcels.length > 0 && parcels[parcels.length - 1].fill_remaining) {
+      const frIdx = parcels.length - 1;
+      const frId = parcels[frIdx].id;
+      const origParcels = parcels.map(p => ({ ...p }));
+
+      // Compute headroom for FR by allocating other (non-FR) parcels first with FR=0
+      const pfixed = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? 0 : (p.total_m3 || 0)) }));
+      const rFixed = computePlan(tanks, pfixed);
+      const allocFixed = Array.isArray(rFixed.allocations) ? rFixed.allocations.filter(a => a.parcel_id !== frId) : [];
+      const usedVolByTank = new Map();
+      allocFixed.forEach(a => usedVolByTank.set(a.tank_id, (usedVolByTank.get(a.tank_id)||0) + (a.assigned_m3||0)));
+      // Sum headroom across included tanks
+      const includedTanks = (tanks||[]).filter(t => t && t.included);
+      let Vhi = 0;
+      includedTanks.forEach(t => {
+        const cmax = (t.volume_m3||0) * (t.max_pct||0);
+        const used = usedVolByTank.get(t.id) || 0;
+        const head = Math.max(0, cmax - used);
+        Vhi += head;
+      });
+      let Vlo = 0;
+      let Vbest = null;
+      for (let iter = 0; iter < 28; iter++) {
+        const V = (Vlo + Vhi) / 2;
+        const testParcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? V : (p.total_m3||0)) }));
+        const r = computePlan(tanks, testParcels);
+        const okAlloc = r && Array.isArray(r.allocations) && r.allocations.length > 0 && !(r?.diagnostics?.errors||[]).length;
+        if (!okAlloc) { Vlo = V; continue; }
+        const m = computeHydroForAllocations(r.allocations);
+        if (!m) { Vlo = V; continue; }
+        const maxT = Math.max(m.Tf||0, m.Tm||0, m.Ta||0);
+        if (maxT <= targetDraft + 1e-3) { Vbest = V; Vlo = V; } else { Vhi = V; }
+      }
+      if (Vbest != null) {
+        parcels = origParcels.map((p,i)=> ({ ...p, fill_remaining: false, total_m3: (i===frIdx ? Vbest : (p.total_m3||0)) }));
+        persistLastState();
+        computeAndRender();
+        setActiveView('layout');
+        return;
+      }
+      // If not found, fall through to generic logic
+    }
+  } catch {}
+
   // NEW: Capacity-first upper-bound logic (simple and monotonic)
   try {
     const origParcels = parcels.map(p => ({ ...p }));
