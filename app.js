@@ -1590,11 +1590,13 @@ function computeHydroForAllocations(allocations) {
   const Tm = solveDraftByDisFW(HYDRO_ROWS, W / rho);
   if (!isFinite(Tm)) return null;
   const H = interpHydro(HYDRO_ROWS, Tm);
-  const trim_cm = (W * (LCG - (H.LCF||0))) / (H.MCT1cm || 1);
+  // Use LCB for trim moment, sign convention: stern trim (+)
+  const LCB = (H && typeof H.LCB === 'number') ? H.LCB : 0;
+  const trim_cm = - (W * (LCG - LCB)) / (H?.MCT1cm || 1);
   const trim_m = trim_cm / 100.0;
   const LBP = SHIP_PARAMS.LBP;
-  const dAP = (LBP/2) + (H.LCF||0);
-  const dFP = (LBP/2) - (H.LCF||0);
+  const dAP = (LBP/2) + (H?.LCF || 0);
+  const dFP = (LBP/2) - (H?.LCF || 0);
   const Ta = Tm + trim_m * (dAP / LBP);
   const Tf = Tm - trim_m * (dFP / LBP);
   const DWT = W - LIGHT_SHIP.weight_mt;
