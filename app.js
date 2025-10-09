@@ -81,22 +81,34 @@ function saveShipMeta(m) {
   localStorage.setItem(LS_SHIP_META, JSON.stringify(m || {}));
 }
 function refreshPresetSelect() {
+  const seenLabels = new Set();
   const options = [];
-  // Prefer Draft Calculator ships if present (shared origin localStorage)
+  // Draft Calculator ships (Hydrostatic)
   try {
     const dcIdxRaw = localStorage.getItem('dc_ships_index');
     const dcIdx = dcIdxRaw ? JSON.parse(dcIdxRaw) : [];
     if (Array.isArray(dcIdx) && dcIdx.length > 0) {
       dcIdx.forEach(entry => {
-        if (entry && entry.id) options.push({ value: `dc:${entry.id}`, label: entry.name || entry.id });
+        if (!entry || !entry.id) return;
+        const base = entry.name || entry.id;
+        const label = `${base} (Hydrostatic)`;
+        if (seenLabels.has(label)) return;
+        seenLabels.add(label);
+        options.push({ value: `dc:${entry.id}`, label });
       });
     }
   } catch {}
-  // Fall back to local presets
+  // Local presets (tanks-only)
   try {
     const presets = loadPresets();
     const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
-    names.forEach(n => options.push({ value: `preset:${n}`, label: n }));
+    names.forEach(n => {
+      const label = n;
+      if (!seenLabels.has(label)) {
+        seenLabels.add(label);
+        options.push({ value: `preset:${n}`, label });
+      }
+    });
   } catch {}
   cfgSelect.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
 }
@@ -1012,7 +1024,7 @@ function autoLoadFirstPresetIfExists() {
   const conf = presets[name];
   if (!Array.isArray(conf)) return false;
   tanks = conf.map(t => ({ ...t }));
-  try { cfgSelect.value = name; cfgNameInput.value = name; } catch {}
+  try { cfgSelect.value = `preset:${name}`; cfgNameInput.value = name; } catch {}
   // Apply meta if stored for this preset
   try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch {}
   persistLastState();
@@ -1044,8 +1056,16 @@ try {
 
 // Config preset actions
 btnSaveCfg.addEventListener('click', () => {
-  const name = (cfgNameInput.value || '').trim();
+  let name = (cfgNameInput.value || '').trim();
   if (!name) { alert('Enter a config name'); return; }
+  // Prevent collision with Hydrostatic (dc) ships by suffixing
+  try {
+    const dcIdxRaw = localStorage.getItem('dc_ships_index');
+    const dcIdx = dcIdxRaw ? JSON.parse(dcIdxRaw) : [];
+    if (Array.isArray(dcIdx) && dcIdx.some(e => (e?.name || e?.id) === name)) {
+      name = `${name} (Local)`;
+    }
+  } catch {}
   const presets = loadPresets();
   if (presets[name] && !confirm('Overwrite existing config?')) return;
   // Only save tanks (exclude ephemeral fields)
@@ -1127,6 +1147,16 @@ function loadDCShip(id) {
     return false;
   }
 }
+// Keep dropdown in sync when Ship Data (draft_calculator) updates localStorage
+window.addEventListener('storage', (e) => {
+  try {
+    if (e && typeof e.key === 'string' && e.key.startsWith('dc_')) {
+      refreshPresetSelect();
+    }
+  } catch {}
+});
+window.addEventListener('focus', () => { try { refreshPresetSelect(); } catch {} });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { try { refreshPresetSelect(); } catch {} } });
 // Load now imports JSON via file chooser and updates only capacities
 btnLoadCfg.addEventListener('click', () => {
   if (fileImportCfg) fileImportCfg.click();
@@ -1244,13 +1274,17 @@ if (btnExportCfg) {
   });
 }
 btnDelCfg.addEventListener('click', () => {
-  const name = cfgSelect.value;
-  if (!name) return;
-  if (!confirm(`Delete config '${name}'?`)) return;
-  const presets = loadPresets();
-  delete presets[name];
-  savePresets(presets);
-  refreshPresetSelect();
+  const selVal = cfgSelect.value;
+  if (!selVal) return;
+  if (selVal.startsWith('dc:')) { alert('Hydrostatic ships are managed in Ship Data. Use Delete Ship there.'); return; }
+  if (selVal.startsWith('preset:')) {
+    const name = selVal.slice(7);
+    if (!confirm(`Delete config '${name}'?`)) return;
+    const presets = loadPresets();
+    delete presets[name];
+    savePresets(presets);
+    refreshPresetSelect();
+  }
 });
 
 // ---- Compact export for quick copy/paste diagnostics ----
