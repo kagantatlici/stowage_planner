@@ -14,9 +14,9 @@
           <button class="tab" data-view="config">Tank Config</button>
           <button class="tab active" data-view="cargo">Cargo & Allocation</button>
           <button class="tab" data-view="layout">Layout Plan</button>
+          <button class="tab" data-view="shipdata" title="Draft & Trim Calculator">Ship Data</button>
         </div>
         <div class="actions">
-          <a href="./ship_data.html?v=5" class="btn-secondary" style="margin-right:8px;" title="Open Ship Data (Draft & Trim)">Ship Data</a>
           <button id="btn-compute" class="btn-primary">Run Stowage Options</button>
         </div>
       </div>
@@ -105,6 +105,13 @@
         <div id="layout-grid" class="layout-wrap"></div>
         <div id="svg-container" class="svg-wrap" style="display:none;"></div>
         <!-- Reasoning trace hidden in UI -->
+      </section>
+      <section id="view-shipdata" class="panel view">
+        <h2>Ship Data — Draft & Trim</h2>
+        <div class="card" style="height: calc(100vh - 260px); min-height: 360px;">
+          <iframe src="https://kagantatlici.github.io/draft_calculator/" style="width:100%; height:100%; border:0; background:#0a1224;"></iframe>
+        </div>
+        <small style="display:block; margin-top:6px; color:#9aa3b2;">Iframe stays loaded when switching tabs to keep your inputs.</small>
       </section>
     </main>
     <script type="module" src="app.js?v=5"></script>
