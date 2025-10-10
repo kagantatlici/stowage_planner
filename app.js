@@ -1178,11 +1178,9 @@ if (!restored) {
   try {
     const active = localStorage.getItem('dc_active_ship');
     if (active) {
-      const ok = loadDCShip(active);
-      if (ok) {
-        try { cfgSelect.value = `dc:${active}`; cfgNameInput.value = (getDCShipName(active) || active); } catch {}
-        loaded = true;
-      }
+      // Apply only metadata to preserve user's current tanks
+      const metaApplied = applyActiveShipMetaOnly();
+      if (metaApplied) loaded = true;
     }
   } catch {}
   if (!loaded) autoLoadFirstPresetIfExists();
@@ -1281,11 +1279,29 @@ function loadDCShip(id) {
     return false;
   }
 }
+// Apply only ship metadata (LBP, hydro rows, LCGs) from currently active DC ship without altering tanks
+function applyActiveShipMetaOnly() {
+  try {
+    const id = localStorage.getItem('dc_active_ship');
+    if (!id) return false;
+    const raw = localStorage.getItem('dc_ship_' + id);
+    if (!raw) return false;
+    const prof = JSON.parse(raw);
+    const meta = extractShipMetaFromProfile(prof);
+    if (meta) { applyShipMeta(meta); return true; }
+  } catch {}
+  return false;
+}
 // Keep dropdown in sync when Ship Data (draft_calculator) updates localStorage
 window.addEventListener('storage', (e) => {
   try {
-    if (e && typeof e.key === 'string' && e.key.startsWith('dc_')) {
+    if (!e || typeof e.key !== 'string') return;
+    if (e.key === 'dc_ships_index' || e.key.startsWith('dc_ship_')) {
       refreshPresetSelect();
+    }
+    if (e.key === 'dc_active_ship') {
+      const applied = applyActiveShipMetaOnly();
+      if (applied) { computeAndRender(); renderActiveShipInfo(); }
     }
   } catch {}
 });
