@@ -51,6 +51,16 @@ const rsConstEl = document.getElementById('rs_const_mt');
 const rsConstLcgEl = document.getElementById('rs_const_lcg');
 const hydroSummaryEl = document.getElementById('hydro-summary');
 
+// Restore persisted UI inputs (reverse-solver + config name) before any render
+restoreReverseInputs();
+restoreCfgName();
+
+// Persist on change
+[rsTargetDraftEl, rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
+  .filter(Boolean)
+  .forEach(el => el.addEventListener('input', persistReverseInputs));
+if (cfgNameInput) cfgNameInput.addEventListener('input', persistCfgName);
+
 // View switching
 const LS_VIEW = 'stowage_view_v1';
 function setActiveView(view) {
@@ -69,6 +79,45 @@ const LS_PRESETS = 'stowage_presets_v1';
 const LS_LAST = 'stowage_last_v2';
 // Per-preset ship meta (stability/hydro/LCGs) storage
 const LS_SHIP_META = 'stowage_ship_meta_v1';
+// Reverse-solver input persistence
+const LS_RS = 'stowage_revsolver_v1';
+// Optional: config name input persistence (UI clarity)
+const LS_CFG_NAME = 'stowage_cfgname_v1';
+
+function persistReverseInputs() {
+  try {
+    const payload = {
+      targetDraft: rsTargetDraftEl ? String(rsTargetDraftEl.value ?? '') : '',
+      rho: rsRhoEl ? String(rsRhoEl.value ?? '') : '',
+      fo: rsFoEl ? String(rsFoEl.value ?? '') : '',
+      fw: rsFwEl ? String(rsFwEl.value ?? '') : '',
+      oth: rsOthEl ? String(rsOthEl.value ?? '') : '',
+      constW: rsConstEl ? String(rsConstEl.value ?? '') : '',
+      constX: rsConstLcgEl ? String(rsConstLcgEl.value ?? '') : ''
+    };
+    localStorage.setItem(LS_RS, JSON.stringify(payload));
+  } catch {}
+}
+function restoreReverseInputs() {
+  try {
+    const raw = localStorage.getItem(LS_RS);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (rsTargetDraftEl && p && 'targetDraft' in p) rsTargetDraftEl.value = p.targetDraft ?? rsTargetDraftEl.value;
+    if (rsRhoEl && p && 'rho' in p) rsRhoEl.value = p.rho ?? rsRhoEl.value;
+    if (rsFoEl && p && 'fo' in p) rsFoEl.value = p.fo ?? rsFoEl.value;
+    if (rsFwEl && p && 'fw' in p) rsFwEl.value = p.fw ?? rsFwEl.value;
+    if (rsOthEl && p && 'oth' in p) rsOthEl.value = p.oth ?? rsOthEl.value;
+    if (rsConstEl && p && 'constW' in p) rsConstEl.value = p.constW ?? rsConstEl.value;
+    if (rsConstLcgEl && p && 'constX' in p) rsConstLcgEl.value = p.constX ?? rsConstLcgEl.value;
+  } catch {}
+}
+function persistCfgName() {
+  try { if (cfgNameInput) localStorage.setItem(LS_CFG_NAME, String(cfgNameInput.value ?? '')); } catch {}
+}
+function restoreCfgName() {
+  try { const v = localStorage.getItem(LS_CFG_NAME); if (cfgNameInput && v != null) cfgNameInput.value = v; } catch {}
+}
 
 function loadPresets() {
   try { return JSON.parse(localStorage.getItem(LS_PRESETS) || '{}'); } catch { return {}; }
@@ -1138,8 +1187,9 @@ if (!restored) {
 }
 
 // If dropdown already has a selection, apply it as active ship on load
+// Avoid overriding restored last state
 try {
-  if (cfgSelect && cfgSelect.value) {
+  if (!restored && cfgSelect && cfgSelect.value) {
     applySelectionValue(cfgSelect.value);
   }
 } catch {}
