@@ -79,6 +79,7 @@ const LS_PRESETS = 'stowage_presets_v1';
 const LS_LAST = 'stowage_last_v2';
 // Per-preset ship meta (stability/hydro/LCGs) storage
 const LS_SHIP_META = 'stowage_ship_meta_v1';
+const LS_VARIANT = 'stowage_variant_v1';
 // Reverse-solver input persistence
 const LS_RS = 'stowage_revsolver_v1';
 // Optional: config name input persistence (UI clarity)
@@ -984,7 +985,7 @@ function renderSummaryAndSvg(result) {
 
 let variantsCache = null;
 let solvingUpperBound = false;
-let selectedVariantKey = 'min_k';
+let selectedVariantKey = (typeof localStorage !== 'undefined' && localStorage.getItem(LS_VARIANT)) || 'min_k';
 
 function computeVariants() {
   ensureUniqueParcelIDs();
@@ -1126,6 +1127,7 @@ btnCompute.addEventListener('click', computeAndRender);
 if (variantSelect) {
   variantSelect.addEventListener('change', () => {
     selectedVariantKey = variantSelect.value;
+    try { localStorage.setItem(LS_VARIANT, selectedVariantKey); } catch {}
     if (!variantsCache) variantsCache = computeVariants();
     const v = variantsCache[selectedVariantKey] || variantsCache['min_k'];
     renderSummaryAndSvg(v.res);
@@ -1199,6 +1201,10 @@ render();
 try {
   const v = localStorage.getItem(LS_VIEW) || 'cargo';
   setActiveView(v);
+} catch {}
+// Auto-compute on load so Allocation/Layout stay populated after page switches
+try {
+  computeAndRender();
 } catch {}
 
 // Config preset actions
