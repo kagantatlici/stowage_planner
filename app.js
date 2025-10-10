@@ -1197,15 +1197,17 @@ try {
 } catch {}
 
 render();
-// Restore last view or default to cargo
+// Restore initial view from URL (#view or ?view=) or last view
 try {
-  const v = localStorage.getItem(LS_VIEW) || 'cargo';
-  setActiveView(v);
+  const qs = new URLSearchParams(window.location.search || '');
+  const fromParam = (qs.get('view') || '').trim();
+  const fromHash = (window.location.hash || '').replace(/^#/, '').trim();
+  const candidate = fromParam || fromHash || localStorage.getItem(LS_VIEW) || 'cargo';
+  const allowed = new Set(['config','cargo','layout','shipdata']);
+  setActiveView(allowed.has(candidate) ? candidate : 'cargo');
 } catch {}
 // Auto-compute on load so Allocation/Layout stay populated after page switches
-try {
-  computeAndRender();
-} catch {}
+try { computeAndRender(); } catch {}
 
 // Config preset actions
 btnSaveCfg.addEventListener('click', () => {
