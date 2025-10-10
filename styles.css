@@ -16,7 +16,7 @@ body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helve
 .header-controls { display:flex; align-items:center; justify-content: space-between; gap:12px; flex-wrap: wrap; }
 .actions button { margin-left: 8px; }
 .container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 16px; }
-.view { display: none; }
+.view { display: none; grid-column: 1 / -1; }
 .view.active { display: block; }
 .view-tabs { display:flex; gap:8px; align-items:center; }
 .view-tabs .tab { background:#17244d; border:1px solid #223266; padding:6px 10px; border-radius:999px; color:#c6d0e9; }
@@ -82,3 +82,8 @@ th { text-align: left; color: var(--muted); font-weight: 600; }
 @media (max-width: 600px) {
   .ship .bow .triangle { border-bottom-width: 60px; }
 }
+
+/* Ship Data tab: full-width + tall iframe */
+#view-shipdata { grid-column: 1 / -1; }
+#view-shipdata .shipdata-frame { height: calc(100vh - 140px); min-height: 420px; }
+#view-shipdata iframe { width: 100%; height: 100%; border: 0; background: #0a1224; }
