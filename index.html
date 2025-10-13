@@ -100,6 +100,7 @@
           <button id="btn-export-json">Export JSON</button>
           <label for="plan-variant" style="color:#9aa3b2; font-size:13px;">Plan Options</label>
           <select id="plan-variant" style="min-width:220px;"></select>
+          <button id="btn-transfer-shipdata" class="btn-primary" title="Send current allocations to Ship Data">Transfer to Ship Data</button>
         </div>
         <div id="hydro-summary" class="card" style="margin-bottom:10px; display:none;"></div>
         <div id="layout-grid" class="layout-wrap"></div>
@@ -109,11 +110,11 @@
       <section id="view-shipdata" class="panel view">
         <h2>Ship Data — Draft & Trim</h2>
         <div class="card shipdata-frame">
-          <iframe src="https://kagantatlici.github.io/draft_calculator/"></iframe>
+          <iframe src="./repo_draft_calculator/index.html"></iframe>
         </div>
         <small style="display:block; margin-top:6px; color:#9aa3b2;">Iframe stays loaded when switching tabs to keep your inputs.</small>
       </section>
     </main>
-    <script type="module" src="app.js?v=6"></script>
+    <script type="module" src="app.js?v=7"></script>
   </body>
   </html>

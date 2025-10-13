@@ -39,6 +39,7 @@ const fileImportCfg = document.getElementById('file-import-cfg');
 const btnExportJson = document.getElementById('btn-export-json');
 const variantSelect = document.getElementById('plan-variant');
 const viewTabs = document.querySelectorAll('.view-tabs .tab');
+const btnTransferShipData = document.getElementById('btn-transfer-shipdata');
 
 // Reverse-solver UI
 const btnSolveDraft = document.getElementById('btn-solve-draft');
@@ -1206,6 +1207,52 @@ try {
 } catch {}
 // Auto-compute on load so Allocation/Layout stay populated after page switches
 try { computeAndRender(); } catch {}
+
+// Build payload to transfer current plan to Ship Data (draft calculator)
+function buildShipDataTransferPayload() {
+  try {
+    if (!variantsCache) variantsCache = computeVariants();
+    const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['min_k']);
+    const res = chosen && chosen.res;
+    if (!res || !Array.isArray(res.allocations) || res.allocations.length === 0) return null;
+    const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
+    const allocs = res.allocations.map(a => ({ tank_id: a.tank_id, weight_mt: a.weight_mt, assigned_m3: a.assigned_m3, fill_pct: a.fill_pct, parcel_id: a.parcel_id }));
+    return {
+      type: 'apply_stowage_plan',
+      version: 1,
+      rho: (inputs && isFinite(inputs.rho)) ? Number(inputs.rho) : undefined,
+      constant: {
+        w: (inputs && isFinite(inputs.constW)) ? Number(inputs.constW) : 0,
+        x_midship_m: (inputs && isFinite(inputs.constX)) ? Number(inputs.constX) : 0,
+        ref: 'ms_plus'
+      },
+      consumables: {
+        fo: (inputs && isFinite(inputs.fo)) ? Number(inputs.fo) : 0,
+        fw: (inputs && isFinite(inputs.fw)) ? Number(inputs.fw) : 0,
+        oth: (inputs && isFinite(inputs.oth)) ? Number(inputs.oth) : 0
+      },
+      allocations: allocs
+    };
+  } catch (_) { return null; }
+}
+
+function postPlanToShipData() {
+  try {
+    const frame = document.querySelector('#view-shipdata iframe');
+    if (!frame || !frame.contentWindow) { alert('Ship Data view is not available.'); return; }
+    const payload = buildShipDataTransferPayload();
+    if (!payload) { alert('No computed allocations to transfer. Run the planner first.'); return; }
+    const msg = { type: 'apply_stowage_plan', payload };
+    let targetOrigin = '*';
+    try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
+    frame.contentWindow.postMessage(msg, targetOrigin || '*');
+    setActiveView('shipdata');
+  } catch (_) { alert('Transfer failed.'); }
+}
+
+if (btnTransferShipData) {
+  btnTransferShipData.addEventListener('click', postPlanToShipData);
+}
 
 // Config preset actions
 btnSaveCfg.addEventListener('click', () => {
