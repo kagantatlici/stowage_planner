@@ -1216,7 +1216,39 @@ function buildShipDataTransferPayload() {
     const res = chosen && chosen.res;
     if (!res || !Array.isArray(res.allocations) || res.allocations.length === 0) return null;
     const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
-    const allocs = res.allocations.map(a => ({ tank_id: a.tank_id, weight_mt: a.weight_mt, assigned_m3: a.assigned_m3, fill_pct: a.fill_pct, parcel_id: a.parcel_id }));
+    // Build parcel -> density (t/m³) map for quick lookup
+    const rhoByParcel = new Map();
+    try {
+      (parcels || []).forEach(p => {
+        if (!p || !p.id) return;
+        const dk = Number(p.density_kg_m3);
+        if (Number.isFinite(dk) && dk > 0) rhoByParcel.set(p.id, dk / 1000);
+      });
+    } catch {}
+    const allocs = res.allocations.map(a => {
+      const vol = Number(a.assigned_m3);
+      const wt = Number(a.weight_mt);
+      let rho = rhoByParcel.get(a.parcel_id);
+      if (!Number.isFinite(rho) || !(rho > 0)) {
+        // Fallback: derive from W/V if available
+        if (Number.isFinite(vol) && vol > 0 && Number.isFinite(wt) && wt > 0) {
+          rho = wt / vol; // t/m³ (numerically = g/cm³)
+        } else {
+          rho = undefined;
+        }
+      }
+      // Also send percent in 0..100 for convenience
+      const pct = (Number.isFinite(a.fill_pct) ? (a.fill_pct * 100) : undefined);
+      return {
+        tank_id: a.tank_id,
+        parcel_id: a.parcel_id,
+        weight_mt: wt,
+        assigned_m3: vol,
+        fill_pct: a.fill_pct,
+        percent: pct,
+        rho
+      };
+    });
     return {
       type: 'apply_stowage_plan',
       version: 1,
