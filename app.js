@@ -914,7 +914,80 @@ function renderSummaryAndSvg(result) {
     hull.appendChild(row);
   });
   const wrap = document.createElement('div');
-  wrap.appendChild(ship);
+  // Cargo layout card
+  const cargoCard = document.createElement('div');
+  cargoCard.appendChild(ship);
+  wrap.appendChild(cargoCard);
+  // Ballast layout card (if ballast allocations exist)
+  if ((ballastAllocs||[]).length > 0 && Array.isArray(BALLAST_TANKS) && BALLAST_TANKS.length > 0) {
+    const bCard = document.createElement('div');
+    const bShip = document.createElement('div');
+    bShip.className = 'ship';
+    bShip.innerHTML = `
+      <div class="bow"><div class="triangle"></div></div>
+      <div class="hull" id="bhull"></div>
+      <div class="stern"></div>
+    `;
+    const bhull = bShip.querySelector('#bhull');
+    // Build used ballast pair rows
+    const usedB = new Map();
+    (ballastAllocs||[]).forEach(b => usedB.set(b.tank_id, b));
+    const getSide = (id)=> guessSideFromId(id) || 'port';
+    const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+    /** @type {Record<string,{P:any,S:any}>} */
+    const bpairs = {};
+    BALLAST_TANKS.forEach(t => {
+      if (!usedB.has(t.id)) return;
+      const key = baseKey(t.id);
+      if (!bpairs[key]) bpairs[key] = { P:null, S:null };
+      const side = getSide(t.id);
+      if (side === 'port') bpairs[key].P = t; else if (side === 'starboard') bpairs[key].S = t;
+    });
+    const browKeys = Object.keys(bpairs);
+    browKeys.forEach(key => {
+      const row = document.createElement('div');
+      row.className = 'tank-row';
+      const P = bpairs[key].P; const S = bpairs[key].S;
+      // Port ballast cell
+      if (P) {
+        const cell = document.createElement('div'); cell.className = 'tank-cell';
+        const a = usedB.get(P.id);
+        cell.innerHTML = `
+          <div class="id">${P.id}</div>
+          ${a ? `
+            <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
+            <div class="meta">Fill: ${isFinite(a.percent)?Number(a.percent).toFixed(1):'-'}%</div>
+            <div class="fillbar"><div style="height:${isFinite(a.percent)?Number(a.percent).toFixed(1):'0'}%; background:#22d3ee"></div></div>
+          ` : `
+            <div class="empty-hint">Ballast</div>
+            <div class="empty-hint">Volume</div>
+            <div class="empty-hint">%</div>
+          `}
+        `;
+        bhull.appendChild(cell);
+      } else { const cell = document.createElement('div'); cell.className='tank-cell'; cell.innerHTML = '<div class="empty-hint">-</div>'; bhull.appendChild(cell); }
+      // Starboard ballast cell
+      if (S) {
+        const cell = document.createElement('div'); cell.className = 'tank-cell';
+        const a = usedB.get(S.id);
+        cell.innerHTML = `
+          <div class="id">${S.id}</div>
+          ${a ? `
+            <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
+            <div class="meta">Fill: ${isFinite(a.percent)?Number(a.percent).toFixed(1):'-'}%</div>
+            <div class="fillbar"><div style="height:${isFinite(a.percent)?Number(a.percent).toFixed(1):'0'}%; background:#22d3ee"></div></div>
+          ` : `
+            <div class="empty-hint">Ballast</div>
+            <div class="empty-hint">Volume</div>
+            <div class="empty-hint">%</div>
+          `}
+        `;
+        bhull.appendChild(cell);
+      } else { const cell = document.createElement('div'); cell.className='tank-cell'; cell.innerHTML = '<div class="empty-hint">-</div>'; bhull.appendChild(cell); }
+    });
+    bCard.appendChild(bShip);
+    wrap.appendChild(bCard);
+  }
   if (layoutGrid) layoutGrid.appendChild(wrap);
 
   // Legend with per-parcel totals
@@ -1173,7 +1246,8 @@ if (variantSelect) {
   variantSelect.addEventListener('change', () => {
     selectedVariantKey = variantSelect.value;
     try { localStorage.setItem(LS_VARIANT, selectedVariantKey); } catch {}
-  if (!variantsCache) variantsCache = computeVariants();
+    // Recompute variants on selection change to ensure fresh scoring under current inputs
+    variantsCache = computeVariants();
     const v = variantsCache[selectedVariantKey] || variantsCache['optimum'];
     renderSummaryAndSvg(v.res);
   });
@@ -1256,7 +1330,7 @@ try { computeAndRender(); } catch {}
 function buildShipDataTransferPayload() {
   try {
     if (!variantsCache) variantsCache = computeVariants();
-    const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['min_k']);
+    const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['optimum']);
     const res = chosen && chosen.res;
     if (!res || !Array.isArray(res.allocations) || res.allocations.length === 0) return null;
     const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
@@ -1594,7 +1668,7 @@ function fmtVol(v) {
 function buildCompactExportText() {
   // Choose currently selected plan (fallback min_k)
   if (!variantsCache) variantsCache = computeVariants();
-  const chosen = variantsCache[selectedVariantKey] || variantsCache['min_k'];
+  const chosen = variantsCache[selectedVariantKey] || variantsCache['optimum'];
   const res = chosen?.res || computePlan(tanks, parcels);
   const di = res?.diagnostics || {};
 
