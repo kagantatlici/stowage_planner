@@ -7,6 +7,11 @@ const LIGHT_SHIP = { weight_mt: null, lcg: null };
 let HYDRO_ROWS = null; // cached hydro rows from draft_calculator
 /** @type {Map<string, number>} */
 let TANK_LCG_MAP = new Map(); // map tank_id -> lcg (midship +forward)
+/** Ballast tanks metadata imported from Ship Data (if available) */
+let BALLAST_TANKS = [];
+// Tolerances
+const TOL_TRIM_M = 0.02;   // m
+const TOL_PS_PCT = 0.2;    // percent
 
 // Simple state
 let tanks = buildDefaultTanks();
@@ -391,8 +396,9 @@ function extractShipMetaFromProfile(profile) {
     } else if (Array.isArray(p.hydrostatics)) {
       meta.hydrostatics = { rows: p.hydrostatics.slice().sort((a,b)=>a.draft_m-b.draft_m) };
     }
-    // Build tank LCG map for cargo/slops
+    // Build tank LCG map for cargo/slops and ballast
     const tank_lcgs = {};
+    const ballast_tanks = [];
     const pushLCGs = (arr) => {
       if (!Array.isArray(arr)) return;
       for (const t of arr) {
@@ -409,8 +415,20 @@ function extractShipMetaFromProfile(profile) {
     if (p.tanks) {
       pushLCGs(p.tanks.cargo);
       // slops are usually in cargo array; included above
+      // Ballast: store native IDs and LCGs and capacities for planner usage
+      if (Array.isArray(p.tanks.ballast)) {
+        for (const t of p.tanks.ballast) {
+          if (!t) continue;
+          const id = t.id || t.name;
+          if (!id) continue;
+          if (isFinite(t.lcg)) tank_lcgs[id] = Number(t.lcg);
+          const cap = (typeof t.cap_m3 === 'number') ? t.cap_m3 : (typeof t.capacity_m3 === 'number') ? t.capacity_m3 : (typeof t.volume_m3 === 'number') ? t.volume_m3 : (typeof t.volume === 'number') ? t.volume : undefined;
+          ballast_tanks.push({ id, name: t.name || id, cap_m3: isFinite(cap) ? Number(cap) : 0, lcg: Number(t.lcg)||0 });
+        }
+      }
     }
     if (Object.keys(tank_lcgs).length) meta.tank_lcgs = tank_lcgs;
+    if (ballast_tanks.length) meta.ballast_tanks = ballast_tanks;
     // Approximate single consumables LCG from FO/FW/OTH if provided
     if (p.tanks && Array.isArray(p.tanks.consumables)) {
       const cons = p.tanks.consumables;
@@ -443,6 +461,9 @@ function applyShipMeta(meta) {
       const m = new Map();
       Object.entries(meta.tank_lcgs).forEach(([k,v])=>{ if (isFinite(v)) m.set(k, Number(v)); });
       TANK_LCG_MAP = m;
+    }
+    if (Array.isArray(meta.ballast_tanks)) {
+      BALLAST_TANKS = meta.ballast_tanks.slice();
     }
   } catch {}
 }
@@ -665,6 +686,13 @@ function renderActiveShipInfo() {
   `;
 }
 
+function guessSideFromId(id) {
+  const s = String(id || '').toUpperCase();
+  if (/(\(|\s|\b)P(\)|\s|\b)$/.test(s) || / P$/.test(s) || /P$/.test(s)) return 'port';
+  if (/(\(|\s|\b)S(\)|\s|\b)$/.test(s) || / S$/.test(s) || /S$/.test(s)) return 'starboard';
+  return null;
+}
+
 function renderSummaryAndSvg(result) {
   if (summaryEl) summaryEl.innerHTML = '';
   if (svgContainer) svgContainer.innerHTML = '';
@@ -675,32 +703,38 @@ function renderSummaryAndSvg(result) {
   if (allocTableEl) allocTableEl.innerHTML = '';
   if (parcelTableEl) parcelTableEl.innerHTML = '';
   let allocations = [];
+  let ballastAllocs = [];
   let diagnostics = null;
   let reasoningTrace = [];
   if (result) {
     allocations = result.allocations || [];
+    ballastAllocs = result.ballastAllocations || result.ballast_allocations || [];
     diagnostics = result.diagnostics || null;
-    const { port_weight_mt, starboard_weight_mt, imbalance_pct, balance_status, warnings, errors } = diagnostics || {};
-    if (diagnostics) {
-      reasoningTrace = diagnostics.reasoning_trace || [];
-      const dir = (port_weight_mt||0) > (starboard_weight_mt||0) ? 'port' : ((port_weight_mt||0) < (starboard_weight_mt||0) ? 'starboard' : 'even');
-      const warnLine = balance_status === 'Balanced'
-        ? 'Balanced'
-        : `Warning imbalance ${(imbalance_pct||0).toFixed(2)}%${dir==='even'?'':` (list to ${dir})`}`;
+    const { warnings, errors } = diagnostics || {};
+    // Combined P/S summary (cargo + ballast)
+    try {
+      const byTank = new Map();
+      tanks.forEach(t => byTank.set(t.id, t));
+      const allAllocs = allocations.concat(ballastAllocs || []);
+      let pW = 0, sW = 0;
+      allAllocs.forEach(a => {
+        const t = byTank.get(a.tank_id);
+        const side = t?.side || guessSideFromId(a.tank_id);
+        if (side === 'port') pW += (a.weight_mt||0);
+        else if (side === 'starboard') sW += (a.weight_mt||0);
+      });
+      const denom = pW + sW;
+      const imb = denom > 0 ? (Math.abs(pW - sW) / denom) * 100 : 0;
+      const dir = (pW > sW) ? 'port' : ((pW < sW) ? 'starboard' : 'even');
+      const warnLine = imb <= TOL_PS_PCT ? `Balanced (d% ${imb.toFixed(2)})` : `Imbalance ${imb.toFixed(2)}%${dir==='even'?'':` (list to ${dir})`}`;
       if (summaryEl) summaryEl.innerHTML = `
         <div class="summary-bar" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <div>Port <b>${(port_weight_mt||0).toFixed(2)}</b> MT</div>
+          <div>Port <b>${(pW||0).toFixed(2)}</b> MT</div>
           <div>${warnLine}</div>
-          <div>Starboard <b>${(starboard_weight_mt||0).toFixed(2)}</b> MT</div>
+          <div>Starboard <b>${(sW||0).toFixed(2)}</b> MT</div>
         </div>
       `;
-      const warnLines = [];
-      (warnings || []).forEach(w => {
-        if (!/Reserved small-tank buffer pairs/.test(w)) warnLines.push('• ' + w);
-      });
-      (diagnostics.errors || []).forEach(w => warnLines.push('✖ ' + w));
-      if (warnsEl) warnsEl.textContent = warnLines.join('\n');
-    }
+    } catch {}
   }
 
   // Hydro summary (optional): compute F/M/A drafts, trim, displacement, DWT if hydro rows & LCG map available
@@ -710,7 +744,8 @@ function renderSummaryAndSvg(result) {
       if (!hbox) return;
       if (!HYDRO_ROWS) await ensureHydroLoaded();
       if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) { hbox.style.display = 'none'; return; }
-      const metrics = computeHydroForAllocations(allocations);
+      const allAllocs = allocations.concat(ballastAllocs || []);
+      const metrics = computeHydroForAllocations(allAllocs);
       if (!metrics) { hbox.style.display = 'none'; return; }
       const { W_total, DWT, Tf, Tm, Ta, Trim } = metrics;
       hbox.style.display = 'block';
@@ -957,6 +992,39 @@ function renderSummaryAndSvg(result) {
       </table>
     `;
 
+    // Ballast table if any ballast allocations exist (rendered in Cargo & Allocation view)
+    const bEl = document.getElementById('ballast-table');
+    if (bEl) {
+      if ((ballastAllocs||[]).length === 0) {
+        bEl.innerHTML = '<div class="muted">No ballast used.</div>';
+      } else {
+        const bRows = ballastAllocs.map(b => {
+          const rho = 1.025;
+          const pct = isFinite(b.percent) ? Number(b.percent) : (()=>{
+            const t = (BALLAST_TANKS||[]).find(x => x.id === b.tank_id);
+            if (t && t.cap_m3 > 0 && isFinite(b.assigned_m3)) return (b.assigned_m3 / t.cap_m3) * 100;
+            return undefined;
+          })();
+          return `<tr>
+            <td>${b.tank_id}</td>
+            <td style="text-align:right;">${isFinite(pct)?pct.toFixed(1)+'%':'-'}</td>
+            <td style="text-align:right;">${(b.assigned_m3||0).toFixed(1)}</td>
+            <td style="text-align:right;">${rho.toFixed(3)}</td>
+            <td style="text-align:right;">${(b.weight_mt||0).toFixed(1)}</td>
+          </tr>`;
+        }).join('');
+        const bTotV = ballastAllocs.reduce((s,b)=>s+(b.assigned_m3||0),0);
+        const bTotW = ballastAllocs.reduce((s,b)=>s+(b.weight_mt||0),0);
+        bEl.innerHTML = `
+          <table class="table">
+            <thead><tr><th>Ballast Tank</th><th style=\"text-align:right;\">%</th><th style=\"text-align:right;\">Vol (m³)</th><th style=\"text-align:right;\">ρ (t/m³)</th><th style=\"text-align:right;\">Weight (t)</th></tr></thead>
+            <tbody>${bRows}</tbody>
+            <tfoot><tr><td>Totals</td><td></td><td style=\"text-align:right;\">${bTotV.toFixed(1)}</td><td></td><td style=\"text-align:right;\">${bTotW.toFixed(1)}</td></tr></tfoot>
+          </table>
+        `;
+      }
+    }
+
     // Parcels summary table
     const parcelRows = parcels.map(p => {
       const vol = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.assigned_m3,0);
@@ -986,79 +1054,70 @@ function renderSummaryAndSvg(result) {
 
 let variantsCache = null;
 let solvingUpperBound = false;
-let selectedVariantKey = (typeof localStorage !== 'undefined' && localStorage.getItem(LS_VARIANT)) || 'min_k';
+let selectedVariantKey = (typeof localStorage !== 'undefined' && localStorage.getItem(LS_VARIANT)) || 'optimum';
 
 function computeVariants() {
   ensureUniqueParcelIDs();
-  const vMin = computePlan(tanks, parcels);
-  const vMax = computePlanMaxRemaining(tanks, parcels);
-  const vAgg = computePlanMinTanksAggressive(tanks, parcels);
-  const vWing = computePlanSingleWingAlternative(tanks, parcels);
-  const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
-  const altList = computePlanMinKAlternatives(tanks, parcels, 5);
+  // Base plan and alternative selections (cargo-only)
+  const base = computePlan(tanks, parcels);
+  const alts = computePlanMinKAlternatives(tanks, parcels, 8);
+  const candidates = [base, ...alts].filter(r => r && Array.isArray(r.allocations) && !(r?.diagnostics?.errors||[]).length);
+  // Helper: metrics
+  const metric = (r) => {
+    const m = computeHydroForAllocations(r.allocations || []);
+    const di = r.diagnostics || {};
+    return {
+      r,
+      W: (m && isFinite(m.DWT)) ? m.DWT : (r.allocations||[]).reduce((s,a)=>s+(a.weight_mt||0),0),
+      Trim: m ? m.Trim : Infinity,
+      Tf: m ? m.Tf : Infinity,
+      Tm: m ? m.Tm : Infinity,
+      Ta: m ? m.Ta : Infinity,
+      dps: isFinite(di.imbalance_pct) ? di.imbalance_pct : 0
+    };
+  };
+  const mets = candidates.map(metric).filter(m => isFinite(m.Tf) && isFinite(m.Tm) && isFinite(m.Ta));
+  // Enforce Dmax filter if target provided
+  const target = getReverseInputs && rsTargetDraftEl ? getReverseInputs().targetDraft : NaN;
+  const withinDmax = (m) => (!isFinite(target) || target <= 0) ? true : (Math.max(m.Tf, m.Tm, m.Ta) <= target + 1e-3);
+  const pool = mets.filter(withinDmax);
+  // Scoring functions
+  const absTrim = (m)=> Math.abs(m.Trim || 0);
+  const scoreEven = (m)=> ({ key: 'alt_even', m, sort: [absTrim(m), Math.abs(m.dps||0), -m.W] });
+  const scoreMax = (m)=> ({ key: 'alt_max', m, sort: [-m.W, absTrim(m), Math.abs(m.dps||0)] });
+  const scoreFwd = (m)=> ({ key: 'alt_fwd', m, sort: [ (m.Trim!=null ? (m.Trim<0 ? Math.abs(m.Trim) : 999) : 999), Math.abs(m.dps||0), -m.W ] });
+  function pick(scoring) {
+    return pool
+      .map(scoring)
+      .sort((a,b)=>{
+        for (let i=0;i<Math.max(a.sort.length,b.sort.length);i++) {
+          const av = a.sort[i] ?? 0; const bv = b.sort[i] ?? 0;
+          if (av < bv) return -1; if (av > bv) return 1;
+        }
+        return 0;
+      })[0]?.m?.r || base;
+  }
+  const altEven = pick(scoreEven);
+  const altMax = pick(scoreMax);
+  const altFwd = pick(scoreFwd);
+  // Optimum: start from evenkeel cargo-only; add minimal ballast to meet strict tolerances if needed
+  const optBase = altEven;
+  const optBallast = computeBallastForOptimum(optBase?.allocations || [], { targetDraft: (isFinite(target)?target:undefined) });
+  const optimumRes = { allocations: optBase?.allocations || [], ballastAllocations: optBallast || [] };
   return {
-    min_k: { id: 'Min Tanks', res: vMin },
-    max_remaining: { id: 'Max Remaining', res: vMax },
-    min_k_aggressive: { id: 'Min Tanks (Aggressive)', res: vAgg },
-    single_wing: { id: 'Single-Wing (Ballast)', res: vWing },
-    min_k_keep_slops_small: { id: 'Min Tanks (Keep SLOPs for Small)', res: vKeepSlopsSmall },
-    // Alternatives at same minimal k
-    ...Object.fromEntries(altList.map((r, i) => [
-      `min_k_alt_${i+1}`,
-      { id: `Min Tanks — Alt ${i+1}`, res: r }
-    ]))
+    optimum: { id: 'Optimum (ballast allowed)', res: optimumRes },
+    alt_evenkeel: { id: 'Alt 1 — Evenkeel (no ballast)', res: altEven },
+    alt_maxdraft: { id: 'Alt 2 — Max Draft (no ballast)', res: altMax },
+    alt_fwdtrim: { id: 'Alt 3 — Fwd Trim (no ballast)', res: altFwd }
   };
 }
 
 function fillVariantSelect() {
   if (!variantSelect) return;
-  function planSig(res) {
-    return res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${a.assigned_m3.toFixed(3)}`).sort().join('|');
-  }
-  function tankCount(res) {
-    return new Set(res.allocations.map(a => a.tank_id)).size;
-  }
-  const baseOrder = ['min_k','min_k_keep_slops_small','min_k_alt_1','min_k_alt_2','min_k_alt_3','min_k_alt_4','min_k_alt_5','single_wing','min_k_aggressive','max_remaining'];
-  const order = baseOrder.filter(k => k in variantsCache).concat(Object.keys(variantsCache).filter(k => !baseOrder.includes(k)));
-  const seen = new Map();
-  const entries = [];
-  for (const key of order) {
-    const v = variantsCache[key];
-    const errs = v?.res?.diagnostics?.errors || [];
-    if (errs.length > 0) continue; // hide infeasible options
-    const sig = planSig(v.res);
-    if (seen.has(sig)) continue; // skip identical plan
-    seen.set(sig, key);
-    entries.push({ key, tanks: tankCount(v.res) });
-  }
-  const minTanks = Math.min(...entries.map(e => e.tanks));
-  const opts = [];
-  let minAssigned = false;
-  for (const e of entries) {
-    let label;
-    if (e.tanks === minTanks && !minAssigned) {
-      label = `Minimum Tanks (${e.tanks} tanks)`;
-      minAssigned = true;
-    } else if (e.key === 'max_remaining') {
-      label = `Maximum Remaining (${e.tanks} tanks)`;
-    } else if (e.tanks === minTanks && minAssigned) {
-      label = `Alternative (${e.tanks} tanks)`;
-    } else {
-      label = `Alternative (${e.tanks} tanks)`;
-    }
-    opts.push({ key: e.key, label });
-  }
-  if (!opts.find(o => o.key === selectedVariantKey)) selectedVariantKey = opts[0]?.key || 'min_k';
+  const order = ['optimum','alt_evenkeel','alt_maxdraft','alt_fwdtrim'];
+  const opts = order.filter(k => variantsCache[k]).map(k => ({ key: k, label: variantsCache[k].id }));
+  if (!opts.find(o => o.key === selectedVariantKey)) selectedVariantKey = opts[0]?.key || 'optimum';
   variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key===selectedVariantKey?'selected':''}>${o.label}</option>`).join('');
-  if (opts.length === 0) {
-    // No viable options: show friendly reasons and tips
-    const reasons = new Set();
-    Object.values(variantsCache).forEach(v => {
-      (v?.res?.diagnostics?.errors || []).forEach(e => reasons.add(e));
-    });
-    const tips = 'Try increasing parcel volume, lowering a tank\'s min%, or reserving SLOPs for small parcels.';
-    if (warnsEl) warnsEl.textContent = `No viable plan options. ${Array.from(reasons).join(' | ')} Tip: ${tips}`;
-  }
 }
 
 function computeAndRender() {
@@ -1075,22 +1134,7 @@ function computeAndRender() {
     }
   } catch {}
   variantsCache = computeVariants();
-  // If target draft is provided, filter variants that violate max(F/M/A) > target
-  try {
-    const target = getReverseInputs && rsTargetDraftEl ? getReverseInputs().targetDraft : NaN;
-    if (isFinite(target) && target > 0) {
-      const filtered = {};
-      Object.entries(variantsCache || {}).forEach(([key, entry]) => {
-        try {
-          const m = computeHydroForAllocations(entry.res?.allocations || []);
-          if (!m) return;
-          const maxT = Math.max(m.Tf || 0, m.Tm || 0, m.Ta || 0);
-          if (maxT <= target + 1e-3) filtered[key] = entry;
-        } catch {}
-      });
-      if (Object.keys(filtered).length > 0) variantsCache = filtered;
-    }
-  } catch {}
+  // Dmax filter already applied in computeVariants
   fillVariantSelect();
   const v = variantsCache[selectedVariantKey];
   persistLastState();
@@ -1129,8 +1173,8 @@ if (variantSelect) {
   variantSelect.addEventListener('change', () => {
     selectedVariantKey = variantSelect.value;
     try { localStorage.setItem(LS_VARIANT, selectedVariantKey); } catch {}
-    if (!variantsCache) variantsCache = computeVariants();
-    const v = variantsCache[selectedVariantKey] || variantsCache['min_k'];
+  if (!variantsCache) variantsCache = computeVariants();
+    const v = variantsCache[selectedVariantKey] || variantsCache['optimum'];
     renderSummaryAndSvg(v.res);
   });
 }
@@ -1249,6 +1293,13 @@ function buildShipDataTransferPayload() {
         rho
       };
     });
+    const ballast = Array.isArray(res.ballastAllocations) ? res.ballastAllocations.map(b => ({
+      tank_id: b.tank_id,
+      weight_mt: Number(b.weight_mt)||0,
+      assigned_m3: Number(b.assigned_m3)||0,
+      percent: isFinite(b.percent)?Number(b.percent):undefined,
+      rho: 1.025
+    })) : [];
     return {
       type: 'apply_stowage_plan',
       version: 1,
@@ -1263,7 +1314,8 @@ function buildShipDataTransferPayload() {
         fw: (inputs && isFinite(inputs.fw)) ? Number(inputs.fw) : 0,
         oth: (inputs && isFinite(inputs.oth)) ? Number(inputs.oth) : 0
       },
-      allocations: allocs
+      allocations: allocs,
+      ballast_allocations: ballast
     };
   } catch (_) { return null; }
 }
@@ -1829,6 +1881,99 @@ function computeHydroForAllocations(allocations) {
   }
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m };
+}
+
+// Compute minimal symmetric ballast (P/S pairs) to meet strict trim tolerance for Optimum variant.
+function computeBallastForOptimum(cargoAllocs, opts) {
+  try {
+    if (!HYDRO_ROWS || !Array.isArray(cargoAllocs)) return [];
+    if (!Array.isArray(BALLAST_TANKS) || BALLAST_TANKS.length < 2) return [];
+    const baseM = computeHydroForAllocations(cargoAllocs);
+    if (!baseM) return [];
+    if (Math.abs(baseM.Trim || 0) <= TOL_TRIM_M) return [];
+    const targetDraft = (opts && isFinite(opts.targetDraft)) ? Number(opts.targetDraft) : NaN;
+    const rho = getReverseInputs().rho || (SHIP_PARAMS.RHO_REF || 1.025);
+    // Build P/S pairs by name heuristic (… P / … S)
+    const pairsMap = new Map();
+    const getSide = (s)=>/(\(|\s|\b)P(\)|\s|\b)$/.test(s.toUpperCase())? 'P' : (/(\(|\s|\b)S(\)|\s|\b)$/.test(s.toUpperCase())? 'S' : null);
+    const baseKey = (s)=>{
+      const u = s.toUpperCase().trim();
+      return u.replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+    };
+    BALLAST_TANKS.forEach(t => {
+      const id = t.id || t.name; if (!id) return;
+      const side = getSide(id); if (!side) return; // require explicit P/S to form pairs
+      const key = baseKey(id);
+      const entry = pairsMap.get(key) || { P:null, S:null };
+      entry[side] = t; pairsMap.set(key, entry);
+    });
+    const pairs = [];
+    pairsMap.forEach((v,k) => { if (v.P && v.S) pairs.push({ key:k, P:v.P, S:v.S }); });
+    if (pairs.length === 0) return [];
+    // Helper: LCG lookup
+    const getLCG = (id, fallback)=> TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : (fallback ?? 0);
+    // Working state
+    let ballast = [];
+    let curAllocs = cargoAllocs.slice();
+    let m = baseM;
+    let iter = 0;
+    while (Math.abs(m.Trim || 0) > TOL_TRIM_M + 1e-4 && iter < 6) {
+      iter++;
+      const H = interpHydro(HYDRO_ROWS, m.Tm);
+      if (!H || !isFinite(H.MCT1cm)) break;
+      const LCF = H.LCF || 0;
+      const M_req = -(m.Trim * 100.0) * H.MCT1cm; // t·m needed about LCF
+      const desir = M_req >= 0 ? 1 : -1;
+      // Rank pairs by lever magnitude in desired direction
+      const ranked = pairs
+        .map(p => {
+          const lcg = ((getLCG(p.P.id, p.P.lcg) + getLCG(p.S.id, p.S.lcg)) / 2) || 0;
+          const lever = lcg - LCF; // m
+          const cap_m3 = (Number(p.P.cap_m3)||0) + (Number(p.S.cap_m3)||0);
+          return { p, lcg, lever, cap_m3 };
+        })
+        .filter(x => x.cap_m3 > 0 && x.lever * desir > 0 && Math.abs(x.lever) > 1e-6)
+        .sort((a,b)=> Math.abs(b.lever) - Math.abs(a.lever));
+      if (ranked.length === 0) break;
+      const pick = ranked[0];
+      const capW = pick.cap_m3 * rho; // t
+      const wNeeded = Math.min(Math.abs(M_req) / Math.abs(pick.lever), capW);
+      if (!(wNeeded > 0)) break;
+      // Try full wNeeded then back off if Dmax violated
+      function buildBallast(w) {
+        const wSide = w/2;
+        const vSide = wSide / rho;
+        const pP = { tank_id: pick.p.P.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: (pick.p.P.cap_m3>0? (vSide/pick.p.P.cap_m3*100):undefined) };
+        const pS = { tank_id: pick.p.S.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: (pick.p.S.cap_m3>0? (vSide/pick.p.S.cap_m3*100):undefined) };
+        return [pP, pS];
+      }
+      let wTry = wNeeded;
+      let ok = true;
+      if (isFinite(targetDraft) && targetDraft > 0) {
+        // Binary search fraction to satisfy Dmax
+        let lo = 0, hi = 1, best = 0;
+        for (let k=0;k<20;k++) {
+          const f = (lo + hi) / 2;
+          const test = buildBallast(wNeeded * f);
+          const mt = computeHydroForAllocations(curAllocs.concat(ballast, test));
+          if (mt) {
+            const maxT = Math.max(mt.Tf||0, mt.Tm||0, mt.Ta||0);
+            if (maxT <= targetDraft + 1e-3) { best = f; lo = f; } else { hi = f; }
+          } else { hi = f; }
+        }
+        wTry = wNeeded * best;
+        ok = best > 1e-4;
+      }
+      if (!ok || !(wTry > 0)) break;
+      const add = buildBallast(wTry);
+      ballast = ballast.concat(add);
+      curAllocs = cargoAllocs.concat(ballast);
+      const m2 = computeHydroForAllocations(curAllocs);
+      if (!m2) break;
+      m = m2;
+    }
+    return ballast;
+  } catch { return []; }
 }
 
 async function reverseSolveAndRun() {
