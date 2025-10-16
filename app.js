@@ -2203,8 +2203,8 @@ async function ensureHydroLoaded() {
 }
 
 async function ensureLCGMapLoaded() {
-  if (TANK_LCG_MAP && TANK_LCG_MAP.size) return TANK_LCG_MAP;
-  const map = new Map();
+  // Always try to augment from file so BALLAST_TANKS can be populated even if LCGs already exist
+  const map = (TANK_LCG_MAP && TANK_LCG_MAP.size) ? new Map(TANK_LCG_MAP) : new Map();
   const ballastFromFile = [];
   try {
     const res = await fetch('./data/tanks.json', { cache: 'no-store' });
@@ -2221,12 +2221,10 @@ async function ensureLCGMapLoaded() {
           if (side && side[2]==='P') map.set('SLOPP', Number(t.lcg));
           if (side && side[2]==='S') map.set('SLOPS', Number(t.lcg));
         }
-        // Also collect ballast tanks from file to use as fallback if Ship Data meta not loaded
         if (String(t.type||'').toLowerCase() === 'ballast') {
           const id = t.id || t.name;
           if (id) {
             ballastFromFile.push({ id, name: t.name || id, cap_m3: (typeof t.cap_m3 === 'number' ? t.cap_m3 : 0), lcg: Number(t.lcg)||0 });
-            // Register LCG so ballast contributes correct trim moment
             map.set(id, Number(t.lcg));
           }
         }
