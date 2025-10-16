@@ -1330,6 +1330,16 @@ function computePlan_UserSpec() {
     const s = M_cargo_allow / denomMass0;
     scaledParcels = scaledParcels.map(p => ({ ...p, fill_remaining:false, total_m3: (Number(p.total_m3||0) * s) }));
   }
+  // 2b) Capacity clamp: if scaled total volume exceeds sum of tank Cmax, bring it down proportionally
+  try {
+    const includedTanks = (tanks||[]).filter(t => t && t.included);
+    const capM3 = includedTanks.reduce((s,t)=> s + (Number(t.volume_m3||0) * Number(t.max_pct||0)), 0);
+    const vScaled = scaledParcels.reduce((s,p)=> s + Number(p.total_m3||0), 0);
+    if (isFinite(capM3) && capM3 > 0 && isFinite(vScaled) && vScaled > capM3 + 1e-6) {
+      const f = capM3 / vScaled;
+      scaledParcels = scaledParcels.map(p => ({ ...p, total_m3: Number(p.total_m3||0) * f }));
+    }
+  } catch {}
   // Allocate
   let res = computePlan(tanks, scaledParcels);
   let allocs = Array.isArray(res.allocations) ? res.allocations.map(a=>({...a})) : [];
