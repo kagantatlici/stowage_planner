@@ -1196,7 +1196,10 @@ function computeVariants() {
   // Build Max Cargo + Aft Ballast candidate: fill remaining at capacity, then ballast to meet Dmax
   let maxCargoBallast = null;
   try {
-    const capParcels = parcels.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true } : { ...p, fill_remaining: false }));
+    // Fill-remaining at capacity: ensure last parcel's total_m3 is undefined
+    const capParcels = parcels.map((p,i,arr) => (i===arr.length-1
+      ? { ...p, total_m3: undefined, fill_remaining: true }
+      : { ...p, fill_remaining: false }));
     const capRes = computePlan(tanks, capParcels);
     const capAlloc = Array.isArray(capRes.allocations) ? capRes.allocations : [];
     if (capAlloc.length > 0) {
