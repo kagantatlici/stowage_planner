@@ -1990,6 +1990,13 @@ function buildCompactExportText() {
   const chosen = variantsCache[selectedVariantKey] || variantsCache['optimum'];
   const res = chosen?.res || computePlan(tanks, parcels);
   const di = res?.diagnostics || {};
+  // Build line for quick version/cache verification
+  let buildLine = '';
+  try {
+    const cb = (APP_BUILD && APP_BUILD.cb) ? ` cb=${APP_BUILD.cb}` : '';
+    const tag = (APP_BUILD && APP_BUILD.build_tag) ? APP_BUILD.build_tag : 'unknown';
+    buildLine = `Build: ${tag}${cb}`;
+  } catch {}
 
   // Inputs (compact)
   const tankTokens = (tanks || []).map(t => {
@@ -2074,6 +2081,7 @@ function buildCompactExportText() {
   } catch {}
   const lines = [
     hdr,
+    (buildLine || null),
     `Tanks(${tanks.length}): ${tankTokens.join(' ')}`,
     `Parcels(${parcels.length}): ${parcelTokens.join(' ')}`,
     reverseLine ? reverseLine : null,
