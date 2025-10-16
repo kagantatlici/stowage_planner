@@ -1180,13 +1180,15 @@ function computeEvenKeelStrict(tanks, parcels) {
     if (isFinite(target) && target > 0) {
       const m0 = hydroOf(allocs);
       if (m0 && maxT(m0) > target + 1e-3) {
-        let lo = 0.0, hi = 1.0, best = null;
+        // Find the LARGEST scale s in [0,1] that still meets Dmax (not the smallest)
+        let lo = 0.0, hi = 1.0;
+        let best = null; // store best allocations at highest feasible s
         for (let it=0; it<28; it++) {
           const s = (lo + hi) / 2;
           const test = scaleAll(allocs, s);
-          if (violatesMin(test)) { lo = s; continue; }
+          if (violatesMin(test)) { hi = s; continue; }
           const m = hydroOf(test);
-          if (m && maxT(m) <= target + 1e-3) { best = test; hi = s; } else { lo = s; }
+          if (m && maxT(m) <= target + 1e-3) { best = test; lo = s; } else { hi = s; }
         }
         if (best) allocs = best; else return null; // infeasible without ballast
       }
