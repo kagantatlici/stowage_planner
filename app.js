@@ -1879,6 +1879,7 @@ async function ensureHydroLoaded() {
 async function ensureLCGMapLoaded() {
   if (TANK_LCG_MAP && TANK_LCG_MAP.size) return TANK_LCG_MAP;
   const map = new Map();
+  const ballastFromFile = [];
   try {
     const res = await fetch('./data/tanks.json', { cache: 'no-store' });
     if (res.ok) {
@@ -1894,10 +1895,20 @@ async function ensureLCGMapLoaded() {
           if (side && side[2]==='P') map.set('SLOPP', Number(t.lcg));
           if (side && side[2]==='S') map.set('SLOPS', Number(t.lcg));
         }
+        // Also collect ballast tanks from file to use as fallback if Ship Data meta not loaded
+        if (String(t.type||'').toLowerCase() === 'ballast') {
+          const id = t.id || t.name;
+          if (id) ballastFromFile.push({ id, name: t.name || id, cap_m3: (typeof t.cap_m3 === 'number' ? t.cap_m3 : 0), lcg: Number(t.lcg)||0 });
+        }
       });
     }
   } catch {}
   TANK_LCG_MAP = map;
+  try {
+    if ((!Array.isArray(BALLAST_TANKS) || BALLAST_TANKS.length === 0) && ballastFromFile.length > 0) {
+      BALLAST_TANKS = ballastFromFile;
+    }
+  } catch {}
   return TANK_LCG_MAP;
 }
 
@@ -2069,7 +2080,8 @@ function computeBallastForOptimum(cargoAllocs, opts) {
         .sort((a,b)=> Math.abs(b.lever) - Math.abs(a.lever));
       if (ranked.length === 0) break;
       const pick = ranked[0];
-      const capW = pick.cap_m3 * rho; // t
+      // If capacity unknown, allow unbounded (Dmax check will limit)
+      const capW = (isFinite(pick.cap_m3) && pick.cap_m3 > 0) ? pick.cap_m3 * rho : Infinity; // t
       const wNeeded = Math.min(Math.abs(M_req) / Math.abs(pick.lever), capW);
       if (!(wNeeded > 0)) break;
       // Try full wNeeded then back off if Dmax violated
