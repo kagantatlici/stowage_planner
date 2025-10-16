@@ -1325,9 +1325,9 @@ function computeEvenKeelStrict(tanks, parcels) {
 }
 
 // User-spec single plan builder per explicit steps
-function computePlan_UserSpec() {
-  try { ensureHydroLoaded(); } catch {}
-  try { ensureLCGMapLoaded(); } catch {}
+async function computePlan_UserSpec() {
+  try { await ensureHydroLoaded(); } catch {}
+  try { await ensureLCGMapLoaded(); } catch {}
   const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
   const target = Number(inputs.targetDraft);
   const rho = Number(inputs.rho) || 1.025;
@@ -1512,31 +1512,38 @@ function computePlan_UserSpec() {
           .filter(x => (trim<0 ? x.lever<0 : x.lever>0))
           .sort((a,b)=> Math.abs(b.lever) - Math.abs(a.lever));
         if (ranked.length) {
-          const pick = ranked[0].p;
           const rhoB = inputs.rho || (SHIP_PARAMS.RHO_REF || 1.025);
-          // Binary search ballast weight up to 6% of current displacement
-          const Wtot = Number(m.W_total||0);
-          let lo = 0, hi = Math.max(100, 0.06 * Wtot), best = 0;
-          let bestPair = null;
-          const build = (w)=>{
-            const wSide = w/2; const vSide = wSide / rhoB;
-            const pctP = (pick.P.cap_m3>0)? (vSide/pick.P.cap_m3*100): undefined;
-            const pctS = (pick.S.cap_m3>0)? (vSide/pick.S.cap_m3*100): undefined;
-            return [
-              { tank_id: pick.P.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctP },
-              { tank_id: pick.S.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctS }
-            ];
-          };
-          for (let it=0; it<22; it++) {
-            const w = (lo + hi) / 2;
-            const test = build(w);
-            const mt = computeHydroForAllocations(allocs.concat(test));
-            if (mt) {
-              const mx = maxT(mt);
-              if (mx <= target + 1e-3) { best = w; bestPair = test; lo = w; } else { hi = w; }
-            } else { hi = w; }
+          let added = [];
+          for (let i = 0; i < ranked.length; i++) {
+            const pick = ranked[i].p;
+            const Wtot = Number(m.W_total||0);
+            let lo = 0, hi = Math.max(100, 0.06 * Wtot), best = 0;
+            let bestPair = null;
+            const build = (w)=>{
+              const wSide = w/2; const vSide = wSide / rhoB;
+              const pctP = (pick.P.cap_m3>0)? (vSide/pick.P.cap_m3*100): undefined;
+              const pctS = (pick.S.cap_m3>0)? (vSide/pick.S.cap_m3*100): undefined;
+              return [
+                { tank_id: pick.P.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctP },
+                { tank_id: pick.S.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctS }
+              ];
+            };
+            for (let it=0; it<22; it++) {
+              const w = (lo + hi) / 2;
+              const test = build(w);
+              const mt = computeHydroForAllocations(allocs.concat(added, test));
+              if (mt) {
+                const mx = maxT(mt);
+                if (mx <= target + 1e-3) { best = w; bestPair = test; lo = w; } else { hi = w; }
+              } else { hi = w; }
+            }
+            if (best > 1e-3 && bestPair) {
+              added = added.concat(bestPair);
+              const mt2 = computeHydroForAllocations(allocs.concat(added));
+              if (mt2 && maxT(mt2) <= target + 1e-3) break;
+            }
           }
-          if (best > 1e-3 && bestPair) ballast = bestPair;
+          if (added.length) ballast = added;
         }
       } catch {}
     }
@@ -1562,9 +1569,9 @@ function computePlan_UserSpec() {
   return { allocations: allocs, diagnostics: res.diagnostics };
 }
 
-function computeVariants() {
+async function computeVariants() {
   ensureUniqueParcelIDs();
-  const res = computePlan_UserSpec();
+  const res = await computePlan_UserSpec();
   return { optimum: { id: 'Plan — Max Cargo @ Dmax + Even Keel', res } };
 }
 
@@ -1580,7 +1587,7 @@ async function computeAndRender() {
   try { await ensureHydroLoaded(); } catch {}
   try { await ensureLCGMapLoaded(); } catch {}
   // Always compute the single user-spec plan
-  variantsCache = computeVariants();
+  variantsCache = await computeVariants();
   // Dmax filter already applied in computeVariants
   fillVariantSelect();
   const v = variantsCache[selectedVariantKey];
