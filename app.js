@@ -1530,15 +1530,15 @@ async function computePlan_UserSpec() {
                 { tank_id: pick.S.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctS }
               ];
             };
-            for (let it=0; it<22; it++) {
-              const w = (lo + hi) / 2;
-              const test = build(w);
-              const mt = computeHydroForAllocations(allocs.concat(added, test));
-              if (mt) {
-                const mx = maxT(mt);
-                if (mx <= target + 1e-3) { best = w; bestPair = test; lo = w; } else { hi = w; }
-              } else { hi = w; }
-            }
+          for (let it=0; it<24; it++) {
+            const w = (lo + hi) / 2;
+            const test = build(w);
+            const mt = computeHydroForAllocations(allocs.concat(added, test));
+            if (mt) {
+              const mx = maxT(mt);
+              if (mx <= target + 1e-3) { best = w; bestPair = test; hi = w; } else { lo = w; }
+            } else { lo = w; }
+          }
             if (best > 1e-3 && bestPair) {
               added = added.concat(bestPair);
               try { ballastDebug.picked_ids.push(`${pick.P.id}/${pick.S.id}`); } catch {}
