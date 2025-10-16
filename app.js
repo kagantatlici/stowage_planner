@@ -1317,7 +1317,70 @@ function computePlan_UserSpec() {
   const DIS_FW = Number(Ht.DIS_FW);
   const W_target_total = DIS_FW * rho;
   const W_known = (isFinite(LIGHT_SHIP.weight_mt)?Number(LIGHT_SHIP.weight_mt):0) + FO + FW + OTH + CONSTW;
-  const M_cargo_allow = Math.max(0, W_target_total - W_known);
+  let M_cargo_allow = Math.max(0, W_target_total - W_known);
+  // Fallback: if allowable cargo mass is zero/negative (e.g., due to meta mismatch), start from capacity plan
+  if (!(M_cargo_allow > 1e-6)) {
+    try {
+      const capParcels = parcels.map((p,i)=> ({ ...p, total_m3: (i===0? undefined : p.total_m3), fill_remaining: (i===0) }));
+      const capRes = computePlan(tanks, capParcels);
+      const capAllocs = Array.isArray(capRes.allocations) ? capRes.allocations : [];
+      if (capAllocs.length > 0) {
+        // Try to even-keel these allocations and then enforce Dmax via ballast if needed
+        let allocs = capAllocs.map(a=>({...a}));
+        const adjust = (function(){
+          const included = (tanks||[]).filter(t=>t&&t.included);
+          const tankMap = new Map(included.map(t=>[t.id,t]));
+          const rho_map = new Map(); (parcels||[]).forEach(p=>rho_map.set(p.id, Number(p.density_kg_m3)||1000));
+          const tol = 0.02;
+          function byTank(as){ const m=new Map(); as.forEach(a=>m.set(a.tank_id,a)); return m; }
+          function volOf(map,tid){ const a=map.get(tid); return (a?.assigned_m3)||0; }
+          function setVol(map,tid,v,pid){ const t=tankMap.get(tid); if(!t)return; const vv=Math.max(0,v); const dens=rho_map.get(pid)||1000; const fill=(t.volume_m3>0)?(vv/t.volume_m3):0; const w=(vv*dens)/1000; let a=map.get(tid); if(a){ a.assigned_m3=vv; a.fill_pct=fill; a.weight_mt=w; } else { a={ tank_id:tid, parcel_id:pid, assigned_m3:vv, fill_pct:fill, weight_mt:w }; } map.set(tid,a); }
+          return function run(as){
+            let map = byTank(as);
+            for (let iter=0; iter<60; iter++) {
+              const cur = Array.from(map.values());
+              const m = computeHydroForAllocations(cur); if(!m) break;
+              const tr = Number(m.Trim||0); if (Math.abs(tr) <= tol) break;
+              const H = interpHydro(HYDRO_ROWS, m.Tm||0); if (!H || !isFinite(H.MCT1cm)) break;
+              const pairSet = new Set(); included.forEach(t=>{ const idx=cotPairIndex(t.id); if(idx!=null) pairSet.add(idx); });
+              const pairs = Array.from(pairSet).map(idx=>{
+                const pId=`COT${idx}P`, sId=`COT${idx}S`; const tP=tankMap.get(pId), tS=tankMap.get(sId);
+                const vP=volOf(map,pId), vS=volOf(map,sId);
+                const minP=tP?tP.volume_m3*tP.min_pct:0, minS=tS?tS.volume_m3*tS.min_pct:0;
+                const maxP=tP?tP.volume_m3*tP.max_pct:0, maxS=tS?tS.volume_m3*tS.max_pct:0;
+                const xP=TANK_LCG_MAP.get(pId), xS=TANK_LCG_MAP.get(sId); const x=(isFinite(xP)&&isFinite(xS))?((xP+xS)/2):(isFinite(xP)?xP:(isFinite(xS)?xS:null));
+                return { idx,pId,sId,vP,vS,minP,minS,maxP,maxS,x };
+              }).filter(e=>e.x!=null);
+              if (pairs.length===0) break;
+              if (tr<0){ // bow down -> move FWD->AFT
+                const donors=[...pairs].sort((a,b)=>b.x-a.x); const receivers=[...pairs].sort((a,b)=>a.x-b.x);
+                const d=donors.find(p=>(p.vP-p.minP>1e-6)&&(p.vS-p.minS>1e-6)); const r=receivers.find(p=>(p.maxP-p.vP>1e-6)&&(p.maxS-p.vS>1e-6));
+                if(!d||!r) break; const lever=(r.x-d.x); if(Math.abs(lever)<1e-6) break;
+                const M_req=-(tr*100.0)*H.MCT1cm; const densAvg=(parcels[0]?.density_kg_m3)||1000;
+                const dW=Math.max(0, Math.min(Math.abs(M_req)/Math.abs(lever), ((d.vP-d.minP)+(d.vS-d.minS))*(densAvg/1000), ((r.maxP-r.vP)+(r.maxS-r.vS))*(densAvg/1000)));
+                if(!(dW>0)) break; const dVpair=dW*1000/densAvg; const dv=Math.min(dVpair/2, d.vP-d.minP, d.vS-d.minS, r.maxP-r.vP, r.maxS-r.vS);
+                if(!(dv>1e-6)) break; setVol(map,d.pId,d.vP-dv,as[0].parcel_id); setVol(map,d.sId,d.vS-dv,as[0].parcel_id); setVol(map,r.pId,r.vP+dv,as[0].parcel_id); setVol(map,r.sId,r.vS+dv,as[0].parcel_id);
+              } else { // stern down -> move AFT->FWD
+                const donors=[...pairs].sort((a,b)=>a.x-b.x); const receivers=[...pairs].sort((a,b)=>b.x-a.x);
+                const d=donors.find(p=>(p.vP-p.minP>1e-6)&&(p.vS-p.minS>1e-6)); const r=receivers.find(p=>(p.maxP-p.vP>1e-6)&&(p.maxS-p.vS>1e-6));
+                if(!d||!r) break; const lever=(r.x-d.x); if(Math.abs(lever)<1e-6) break;
+                const M_req=-(tr*100.0)*H.MCT1cm; const densAvg=(parcels[0]?.density_kg_m3)||1000;
+                const dW=Math.max(0, Math.min(Math.abs(M_req)/Math.abs(lever), ((d.vP-d.minP)+(d.vS-d.minS))*(densAvg/1000), ((r.maxP-r.vP)+(r.maxS-r.vS))*(densAvg/1000)));
+                if(!(dW>0)) break; const dVpair=dW*1000/densAvg; const dv=Math.min(dVpair/2, d.vP-d.minP, d.vS-d.minS, r.maxP-r.vP, r.maxS-r.vS);
+                if(!(dv>1e-6)) break; setVol(map,d.pId,d.vP-dv,as[0].parcel_id); setVol(map,d.sId,d.vS-dv,as[0].parcel_id); setVol(map,r.pId,r.vP+dv,as[0].parcel_id); setVol(map,r.sId,r.vS+dv,as[0].parcel_id);
+              }
+            }
+            return Array.from(map.values());
+          }
+        })();
+        allocs = adjust(allocs);
+        const ballast = computeBallastForOptimum(allocs, { targetDraft: target });
+        return { allocations: allocs, ballastAllocations: ballast||[], diagnostics: capRes.diagnostics };
+      }
+    } catch {}
+    // If still nothing, return simple computePlan
+    return computePlan(tanks, parcels);
+  }
   // 2) Scale current parcels to meet allowed mass (no Dmax consideration here)
   const base = (parcels||[]).map(p => ({ id: p.id, rho: Number(p.density_kg_m3)||1000, v: Number(p.total_m3||0) }));
   let denomMass0 = base.reduce((s,r)=> s + (r.v * (r.rho/1000)), 0);
