@@ -94,6 +94,28 @@ const LS_RS = 'stowage_revsolver_v1';
 // Optional: config name input persistence (UI clarity)
 const LS_CFG_NAME = 'stowage_cfgname_v1';
 
+// Build metadata for debugging/versioning in exports
+const APP_BUILD = (() => {
+  try {
+    const qs = new URLSearchParams(location.search || '');
+    const cb = qs.get('cb') || null;
+    return {
+      app: 'stowage_planner',
+      build_tag: 'user-spec-maxcargo-dmax-evenkeel',
+      cb,
+      loaded_at: new Date().toISOString(),
+      features: {
+        dynamic_import: true,
+        evenkeel_strict: true,
+        ballast_lcg_mapped: true,
+        ballast_dmax_binary_search: true
+      }
+    };
+  } catch (_) {
+    return { app: 'stowage_planner', build_tag: 'user-spec-maxcargo-dmax-evenkeel', loaded_at: new Date().toISOString() };
+  }
+})();
+
 // ---- Evenkeel helper (local) ----
 function cotPairIndex(id) {
   const m = /COT(\d+)/i.exec(String(id||''));
@@ -2074,9 +2096,9 @@ btnExportJson.addEventListener('click', async (ev) => {
       const plans = {};
       Object.entries(variantsCache).forEach(([key, entry]) => {
         const { id, res } = entry;
-        plans[key] = { label: id, allocations: res.allocations || [], diagnostics: res.diagnostics || null };
+        plans[key] = { label: id, allocations: res.allocations || [], ballastAllocations: (res.ballastAllocations||res.ballast_allocations)||[], diagnostics: res.diagnostics || null };
       });
-      const data = { tanks, parcels, plans };
+      const data = { build: APP_BUILD, tanks, parcels, plans };
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
       alert('Copied ALL plan options JSON to clipboard.');
