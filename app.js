@@ -1,4 +1,4 @@
-import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy } from './engine/stowage.js?v=6';
+import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK } from './engine/stowage.js?v=6';
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
 // Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.
@@ -913,11 +913,10 @@ function renderSummaryAndSvg(result) {
     }
     hull.appendChild(row);
   });
-  const wrap = document.createElement('div');
   // Cargo layout card
   const cargoCard = document.createElement('div');
   cargoCard.appendChild(ship);
-  wrap.appendChild(cargoCard);
+  if (layoutGrid) layoutGrid.appendChild(cargoCard);
   // Ballast layout card (if ballast allocations exist)
   if ((ballastAllocs||[]).length > 0 && Array.isArray(BALLAST_TANKS) && BALLAST_TANKS.length > 0) {
     const bCard = document.createElement('div');
@@ -986,9 +985,9 @@ function renderSummaryAndSvg(result) {
       } else { const cell = document.createElement('div'); cell.className='tank-cell'; cell.innerHTML = '<div class="empty-hint">-</div>'; bhull.appendChild(cell); }
     });
     bCard.appendChild(bShip);
-    wrap.appendChild(bCard);
+    if (layoutGrid) layoutGrid.appendChild(bCard);
   }
-  if (layoutGrid) layoutGrid.appendChild(wrap);
+  // layoutGrid already has class 'layout-wrap' which arranges children side-by-side
 
   // Legend with per-parcel totals
   const legend = document.createElement('div');
@@ -1134,7 +1133,12 @@ function computeVariants() {
   // Base plan and alternative selections (cargo-only)
   const base = computePlan(tanks, parcels);
   const alts = computePlanMinKAlternatives(tanks, parcels, 8);
-  const candidates = [base, ...alts].filter(r => r && Array.isArray(r.allocations) && !(r?.diagnostics?.errors||[]).length);
+  // Expand candidate pool with other objective modes to increase diversity
+  const cMaxK = computePlanMaxK(tanks, parcels);
+  const cMinLocked = computePlanMaxRemaining(tanks, parcels);
+  const cWing = computePlanSingleWingAlternative(tanks, parcels);
+  const candidates = [base, ...alts, cMaxK, cMinLocked, cWing]
+    .filter(r => r && Array.isArray(r.allocations) && !(r?.diagnostics?.errors||[]).length);
   // Helper: metrics
   const metric = (r) => {
     const m = computeHydroForAllocations(r.allocations || []);
@@ -1154,12 +1158,16 @@ function computeVariants() {
   const target = getReverseInputs && rsTargetDraftEl ? getReverseInputs().targetDraft : NaN;
   const withinDmax = (m) => (!isFinite(target) || target <= 0) ? true : (Math.max(m.Tf, m.Tm, m.Ta) <= target + 1e-3);
   const pool = mets.filter(withinDmax);
+  // Signature for deduping by allocation volumes
+  const sigOf = (res) => (res && Array.isArray(res.allocations))
+    ? res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${Number(a.assigned_m3||0).toFixed(3)}`).sort().join('|')
+    : '';
   // Scoring functions
   const absTrim = (m)=> Math.abs(m.Trim || 0);
   const scoreEven = (m)=> ({ key: 'alt_even', m, sort: [absTrim(m), Math.abs(m.dps||0), -m.W] });
   const scoreMax = (m)=> ({ key: 'alt_max', m, sort: [-m.W, absTrim(m), Math.abs(m.dps||0)] });
   const scoreFwd = (m)=> ({ key: 'alt_fwd', m, sort: [ (m.Trim!=null ? (m.Trim<0 ? Math.abs(m.Trim) : 999) : 999), Math.abs(m.dps||0), -m.W ] });
-  function pick(scoring) {
+  function sortedBy(scoring) {
     return pool
       .map(scoring)
       .sort((a,b)=>{
@@ -1168,21 +1176,69 @@ function computeVariants() {
           if (av < bv) return -1; if (av > bv) return 1;
         }
         return 0;
-      })[0]?.m?.r || base;
+      })
+      .map(x => x.m.r || base);
   }
-  const altEven = pick(scoreEven);
-  const altMax = pick(scoreMax);
-  const altFwd = pick(scoreFwd);
-  // Optimum: start from evenkeel cargo-only; add minimal ballast to meet strict tolerances if needed
-  const optBase = altEven;
-  const optBallast = computeBallastForOptimum(optBase?.allocations || [], { targetDraft: (isFinite(target)?target:undefined) });
-  const optimumRes = { allocations: optBase?.allocations || [], ballastAllocations: optBallast || [] };
-  return {
+  function pickDistinct(scoring, takenSigs) {
+    const ordered = sortedBy(scoring);
+    for (const r of ordered) {
+      const s = sigOf(r);
+      if (!takenSigs.has(s)) { takenSigs.add(s); return r; }
+    }
+    return null;
+  }
+  const usedSigs = new Set();
+  // Always consider base as a valid fallback
+  usedSigs.add(sigOf(base));
+  const altEven = pickDistinct(scoreEven, usedSigs) || base;
+  const altMax = pickDistinct(scoreMax, usedSigs);
+  const altFwd = pickDistinct(scoreFwd, usedSigs);
+  // Build Max Cargo + Aft Ballast candidate: fill remaining at capacity, then ballast to meet Dmax
+  let maxCargoBallast = null;
+  try {
+    const capParcels = parcels.map((p,i,arr) => (i===arr.length-1 ? { ...p, fill_remaining: true } : { ...p, fill_remaining: false }));
+    const capRes = computePlan(tanks, capParcels);
+    const capAlloc = Array.isArray(capRes.allocations) ? capRes.allocations : [];
+    if (capAlloc.length > 0) {
+      const capBallast = computeBallastForOptimum(capAlloc, { targetDraft: (isFinite(target)?target:undefined) });
+      maxCargoBallast = { allocations: capAlloc, ballastAllocations: Array.isArray(capBallast) ? capBallast : [] };
+    }
+  } catch {}
+  // Optimum: prefer Max Cargo + Ballast if available; otherwise evenkeel cargo + minimal ballast
+  let optimumRes;
+  if (maxCargoBallast && (maxCargoBallast.allocations||[]).length) {
+    optimumRes = maxCargoBallast;
+  } else {
+    const optBase = altEven;
+    const optBallast = computeBallastForOptimum(optBase?.allocations || [], { targetDraft: (isFinite(target)?target:undefined) });
+    optimumRes = { allocations: optBase?.allocations || [], ballastAllocations: optBallast || [] };
+  }
+  // Build variants map but omit duplicates/non-existent results
+  const out = {
     optimum: { id: 'Optimum (ballast allowed)', res: optimumRes },
-    alt_evenkeel: { id: 'Alt 1 — Evenkeel (no ballast)', res: altEven },
-    alt_maxdraft: { id: 'Alt 2 — Max Draft (no ballast)', res: altMax },
-    alt_fwdtrim: { id: 'Alt 3 — Fwd Trim (no ballast)', res: altFwd }
+    alt_evenkeel: { id: 'Alt 1 — Evenkeel (no ballast)', res: altEven }
   };
+  const sigOpt = sigOf(optimumRes);
+  if (altMax && sigOf(altMax) !== sigOf(altEven) && sigOf(altMax) !== sigOpt) out['alt_maxdraft'] = { id: 'Alt 2 — Max Draft (no ballast)', res: altMax };
+  if (altFwd && sigOf(altFwd) !== sigOf(altEven) && sigOf(altFwd) !== sigOpt) out['alt_fwdtrim'] = { id: 'Alt 3 — Fwd Trim (no ballast)', res: altFwd };
+  // Fallbacks: ensure we always provide three distinct no-ballast alternatives
+  const needKeys = ['alt_maxdraft','alt_fwdtrim'];
+  const haveSigs = new Set([sigOf(optimumRes), sigOf(out.alt_evenkeel.res)]);
+  if (out.alt_maxdraft) haveSigs.add(sigOf(out.alt_maxdraft.res));
+  if (out.alt_fwdtrim) haveSigs.add(sigOf(out.alt_fwdtrim.res));
+  const distinctList = [];
+  const seen = new Set();
+  candidates.forEach(r => { const s = sigOf(r); if (!seen.has(s)) { seen.add(s); distinctList.push(r); } });
+  for (const k of needKeys) {
+    if (!out[k]) {
+      const pick = distinctList.find(r => !haveSigs.has(sigOf(r)) && sigOf(r) !== sigOf(out.alt_evenkeel.res));
+      if (pick) {
+        haveSigs.add(sigOf(pick));
+        out[k] = { id: (k==='alt_maxdraft' ? 'Alt 2 — Diversified' : 'Alt 3 — Diversified'), res: pick };
+      }
+    }
+  }
+  return out;
 }
 
 function fillVariantSelect() {
