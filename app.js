@@ -1485,6 +1485,7 @@ async function computePlan_UserSpec() {
   if (!m || maxT(m) > target + tol) {
     // 4) Ballast to meet Dmax. If W exceeds target, reduce cargo equally
     let ballast = computeBallastForOptimum(allocs, { targetDraft: target });
+    let ballastDebug = null;
     // Fallback: force ballast on extreme lever pair if none added
     if (!ballast || ballast.length === 0) {
       try {
@@ -1501,6 +1502,7 @@ async function computePlan_UserSpec() {
           entry[side] = t; pairsMap.set(key, entry);
         });
         const pairs = []; pairsMap.forEach((v,k)=>{ if (v.P && v.S) pairs.push({ key:k, P:v.P, S:v.S }); });
+        ballastDebug = { seen_pairs: pairs.length, pair_ids: pairs.map(p=>`${p.P.id}/${p.S.id}`), picked_ids: [] };
         const getLCG = (id, fallback)=> TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : (fallback ?? 0);
         const trim = Number(m.Trim||0);
         const ranked = pairs
@@ -1539,6 +1541,7 @@ async function computePlan_UserSpec() {
             }
             if (best > 1e-3 && bestPair) {
               added = added.concat(bestPair);
+              try { ballastDebug.picked_ids.push(`${pick.P.id}/${pick.S.id}`); } catch {}
               const mt2 = computeHydroForAllocations(allocs.concat(added));
               if (mt2 && maxT(mt2) <= target + 1e-3) break;
             }
@@ -1564,7 +1567,7 @@ async function computePlan_UserSpec() {
       all = allocs.concat(ballast||[]);
       mm = computeHydroForAllocations(all);
     }
-    return { allocations: allocs, ballastAllocations: ballast||[], diagnostics: res.diagnostics };
+    return { allocations: allocs, ballastAllocations: ballast||[], ballastDebug: ballastDebug||null, diagnostics: res.diagnostics };
   }
   return { allocations: allocs, diagnostics: res.diagnostics };
 }
@@ -2166,7 +2169,7 @@ btnExportJson.addEventListener('click', async (ev) => {
       const plans = {};
       Object.entries(variantsCache).forEach(([key, entry]) => {
         const { id, res } = entry;
-        plans[key] = { label: id, allocations: res.allocations || [], ballastAllocations: (res.ballastAllocations||res.ballast_allocations)||[], diagnostics: res.diagnostics || null };
+        plans[key] = { label: id, allocations: res.allocations || [], ballastAllocations: (res.ballastAllocations||res.ballast_allocations)||[], ballastDebug: res.ballastDebug || null, diagnostics: res.diagnostics || null };
       });
       const data = { build: APP_BUILD, tanks, parcels, plans };
       const text = JSON.stringify(data, null, 2);
