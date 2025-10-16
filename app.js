@@ -2027,11 +2027,12 @@ function buildCompactExportText() {
     return `${pid}:k${kL}-${kH}->${kC}@${per}(${par})`;
   });
 
-  // Short signature over inputs+allocs
+  // Short signature over inputs+allocs (include ballast)
   const sigBase = JSON.stringify({
     t: tanks.map(t => ({ id: t.id, v: t.volume_m3, a: t.min_pct, b: t.max_pct, i: !!t.included })),
     p: parcels.map(p => ({ id: p.id, v: p.total_m3, r: p.density_kg_m3, t: p.temperature_c, fr: !!p.fill_remaining })),
-    a: (res.allocations||[]).map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 }))
+    a: (res.allocations||[]).map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 })),
+    b: ((res.ballastAllocations||res.ballast_allocations)||[]).map(b => ({ t: b.tank_id, v: b.assigned_m3 }))
   });
   const sig = quickHash(sigBase);
 
@@ -2040,7 +2041,7 @@ function buildCompactExportText() {
   // Hydro summary for export (if available)
   let hydroLine = null;
   try {
-    const m = computeHydroForAllocations(res.allocations || []);
+    const m = computeHydroForAllocations([...(res.allocations||[]), ...((res.ballastAllocations||res.ballast_allocations)||[])]);
     if (m) {
       const H = interpHydro(HYDRO_ROWS, m.Tm || 0) || {};
       hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf||0).toFixed(3)} Tm=${(m.Tm||0).toFixed(3)} Ta=${(m.Ta||0).toFixed(3)} Trim=${(m.Trim||0).toFixed(3)} LCF=${isFinite(H.LCF)?H.LCF.toFixed(2):'-'} LBP=${isFinite(SHIP_PARAMS.LBP)?SHIP_PARAMS.LBP.toFixed(2):'-'} rho=${isFinite(getReverseInputs().rho)?String(getReverseInputs().rho):String(SHIP_PARAMS.RHO_REF)}`;
@@ -2054,6 +2055,8 @@ function buildCompactExportText() {
     hydroLine,
     `Diag: P=${pwt} S=${swt} ${bstat} d%=${imb} warns=${wcount} errs=${ecount}`,
     `Alloc(${allocTokens.length}): ${allocTokens.join(' ')}`,
+    // Ballast line
+    (((res.ballastAllocations||res.ballast_allocations)||[]).length ? `Ballast(${(res.ballastAllocations||res.ballast_allocations).length}): ${((res.ballastAllocations||res.ballast_allocations)||[]).map(b => `${b.tank_id}:${fmtVol(b.assigned_m3)}|${isFinite(b.percent)?Number(b.percent).toFixed(1)+'%':'?'}`).join(' ')}` : null),
     traceTokens.length ? `Trace: ${traceTokens.join(' ')}` : null
   ].filter(Boolean);
   return lines.join('\n');
