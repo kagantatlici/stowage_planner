@@ -2067,7 +2067,8 @@ function computeBallastForOptimum(cargoAllocs, opts) {
       if (!H || !isFinite(H.MCT1cm)) break;
       const LCF = H.LCF || 0;
       const M_req = -(m.Trim * 100.0) * H.MCT1cm; // t·m needed about LCF
-      const desir = M_req >= 0 ? 1 : -1;
+      // Choose ballast side by current trim sign: bow down (trim<0) -> use AFT (lever<0); stern down (trim>0) -> use FWD (lever>0)
+      const desir = (m.Trim >= 0 ? 1 : -1);
       // Rank pairs by lever magnitude in desired direction
       const ranked = pairs
         .map(p => {
