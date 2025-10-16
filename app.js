@@ -1299,121 +1299,120 @@ function computeEvenKeelStrict(tanks, parcels) {
   } catch { return null; }
 }
 
+// User-spec single plan builder per explicit steps
+function computePlan_UserSpec() {
+  try { ensureHydroLoaded(); } catch {}
+  try { ensureLCGMapLoaded(); } catch {}
+  const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
+  const target = Number(inputs.targetDraft);
+  const rho = Number(inputs.rho) || 1.025;
+  const FO = Number(inputs.fo)||0, FW = Number(inputs.fw)||0, OTH = Number(inputs.oth)||0, CONSTW = Number(inputs.constW)||0;
+  // If no valid target, fallback to simple plan
+  if (!(isFinite(target) && target > 0) || !HYDRO_ROWS || !HYDRO_ROWS.length) {
+    return computePlan(tanks, parcels);
+  }
+  // 1) Max cargo from hydro (mean draft target)
+  const Ht = interpHydro(HYDRO_ROWS, target);
+  if (!Ht || !isFinite(Ht.DIS_FW)) return computePlan(tanks, parcels);
+  const DIS_FW = Number(Ht.DIS_FW);
+  const W_target_total = DIS_FW * rho;
+  const W_known = (isFinite(LIGHT_SHIP.weight_mt)?Number(LIGHT_SHIP.weight_mt):0) + FO + FW + OTH + CONSTW;
+  const M_cargo_allow = Math.max(0, W_target_total - W_known);
+  // 2) Scale current parcels to meet allowed mass (no Dmax consideration here)
+  const base = (parcels||[]).map(p => ({ id: p.id, rho: Number(p.density_kg_m3)||1000, v: Number(p.total_m3||0) }));
+  let denomMass0 = base.reduce((s,r)=> s + (r.v * (r.rho/1000)), 0);
+  let scaledParcels = parcels.map(p => ({ ...p }));
+  if (denomMass0 <= 0) {
+    if (scaledParcels.length === 0) scaledParcels = [{ id:'P1', name:'cargo', total_m3: 0, density_kg_m3: 1000, temperature_c: 15, color:'#888' }];
+    const rho0 = Number(scaledParcels[0].density_kg_m3)||1000;
+    scaledParcels = scaledParcels.map((p,i)=> ({ ...p, fill_remaining:false, total_m3: (i===0? (M_cargo_allow*1000/rho0) : 0) }));
+  } else {
+    const s = M_cargo_allow / denomMass0;
+    scaledParcels = scaledParcels.map(p => ({ ...p, fill_remaining:false, total_m3: (Number(p.total_m3||0) * s) }));
+  }
+  // Allocate
+  let res = computePlan(tanks, scaledParcels);
+  let allocs = Array.isArray(res.allocations) ? res.allocations.map(a=>({...a})) : [];
+  // 3) Trim correction by cargo transfers (keep Wcargo)
+  // Reuse EvenKeel adjustor but skipping its Dmax scaling by feeding current allocs
+  const adjust = (function(){
+    const included = (tanks||[]).filter(t=>t&&t.included);
+    const tankMap = new Map(included.map(t=>[t.id,t]));
+    const rho_map = new Map(); (parcels||[]).forEach(p=>rho_map.set(p.id, Number(p.density_kg_m3)||1000));
+    const tol = 0.02;
+    function byTank(as){ const m=new Map(); as.forEach(a=>m.set(a.tank_id,a)); return m; }
+    function volOf(map,tid){ const a=map.get(tid); return (a?.assigned_m3)||0; }
+    function setVol(map,tid,v,pid){ const t=tankMap.get(tid); if(!t)return; const vv=Math.max(0,v); const dens=rho_map.get(pid)||1000; const fill=(t.volume_m3>0)?(vv/t.volume_m3):0; const w=(vv*dens)/1000; let a=map.get(tid); if(a){ a.assigned_m3=vv; a.fill_pct=fill; a.weight_mt=w; } else { a={ tank_id:tid, parcel_id:pid, assigned_m3:vv, fill_pct:fill, weight_mt:w }; } map.set(tid,a); }
+    return function run(as){
+      let map = byTank(as);
+      for (let iter=0; iter<60; iter++) {
+        const cur = Array.from(map.values());
+        const m = computeHydroForAllocations(cur); if(!m) break;
+        const tr = Number(m.Trim||0); if (Math.abs(tr) <= tol) break;
+        const H = interpHydro(HYDRO_ROWS, m.Tm||0); if (!H || !isFinite(H.MCT1cm)) break;
+        const pairSet = new Set(); included.forEach(t=>{ const idx=cotPairIndex(t.id); if(idx!=null) pairSet.add(idx); });
+        const pairs = Array.from(pairSet).map(idx=>{
+          const pId=`COT${idx}P`, sId=`COT${idx}S`; const tP=tankMap.get(pId), tS=tankMap.get(sId);
+          const vP=volOf(map,pId), vS=volOf(map,sId);
+          const minP=tP?tP.volume_m3*tP.min_pct:0, minS=tS?tS.volume_m3*tS.min_pct:0;
+          const maxP=tP?tP.volume_m3*tP.max_pct:0, maxS=tS?tS.volume_m3*tS.max_pct:0;
+          const xP=TANK_LCG_MAP.get(pId), xS=TANK_LCG_MAP.get(sId); const x=(isFinite(xP)&&isFinite(xS))?((xP+xS)/2):(isFinite(xP)?xP:(isFinite(xS)?xS:null));
+          return { idx,pId,sId,vP,vS,minP,minS,maxP,maxS,x };
+        }).filter(e=>e.x!=null);
+        if (pairs.length===0) break;
+        if (tr<0){ // bow down -> move FWD->AFT
+          const donors=[...pairs].sort((a,b)=>b.x-a.x); const receivers=[...pairs].sort((a,b)=>a.x-b.x);
+          const d=donors.find(p=>(p.vP-p.minP>1e-6)&&(p.vS-p.minS>1e-6)); const r=receivers.find(p=>(p.maxP-p.vP>1e-6)&&(p.maxS-p.vS>1e-6));
+          if(!d||!r) break; const lever=(r.x-d.x); if(Math.abs(lever)<1e-6) break;
+          const M_req=-(tr*100.0)*H.MCT1cm; const densAvg=(parcels[0]?.density_kg_m3)||1000;
+          const dW=Math.max(0, Math.min(Math.abs(M_req)/Math.abs(lever), ((d.vP-d.minP)+(d.vS-d.minS))*(densAvg/1000), ((r.maxP-r.vP)+(r.maxS-r.vS))*(densAvg/1000)));
+          if(!(dW>0)) break; const dVpair=dW*1000/densAvg; const dv=Math.min(dVpair/2, d.vP-d.minP, d.vS-d.minS, r.maxP-r.vP, r.maxS-r.vS);
+          if(!(dv>1e-6)) break; setVol(map,d.pId,d.vP-dv,as[0].parcel_id); setVol(map,d.sId,d.vS-dv,as[0].parcel_id); setVol(map,r.pId,r.vP+dv,as[0].parcel_id); setVol(map,r.sId,r.vS+dv,as[0].parcel_id);
+        } else { // stern down -> move AFT->FWD
+          const donors=[...pairs].sort((a,b)=>a.x-b.x); const receivers=[...pairs].sort((a,b)=>b.x-a.x);
+          const d=donors.find(p=>(p.vP-p.minP>1e-6)&&(p.vS-p.minS>1e-6)); const r=receivers.find(p=>(p.maxP-p.vP>1e-6)&&(p.maxS-p.vS>1e-6));
+          if(!d||!r) break; const lever=(r.x-d.x); if(Math.abs(lever)<1e-6) break;
+          const M_req=-(tr*100.0)*H.MCT1cm; const densAvg=(parcels[0]?.density_kg_m3)||1000;
+          const dW=Math.max(0, Math.min(Math.abs(M_req)/Math.abs(lever), ((d.vP-d.minP)+(d.vS-d.minS))*(densAvg/1000), ((r.maxP-r.vP)+(r.maxS-r.vS))*(densAvg/1000)));
+          if(!(dW>0)) break; const dVpair=dW*1000/densAvg; const dv=Math.min(dVpair/2, d.vP-d.minP, d.vS-d.minS, r.maxP-r.vP, r.maxS-r.vS);
+          if(!(dv>1e-6)) break; setVol(map,d.pId,d.vP-dv,as[0].parcel_id); setVol(map,d.sId,d.vS-dv,as[0].parcel_id); setVol(map,r.pId,r.vP+dv,as[0].parcel_id); setVol(map,r.sId,r.vS+dv,as[0].parcel_id);
+        }
+      }
+      return Array.from(map.values());
+    }
+  })();
+  allocs = adjust(allocs);
+  let m = computeHydroForAllocations(allocs);
+  const tol = 0.02; const maxT = (mm)=> Math.max(mm.Tf||0, mm.Tm||0, mm.Ta||0);
+  if (!m || maxT(m) > target + tol) {
+    // 4) Ballast to meet Dmax. If W exceeds target, reduce cargo equally
+    const ballast = computeBallastForOptimum(allocs, { targetDraft: target });
+    let all = allocs.concat(ballast||[]);
+    let mm = computeHydroForAllocations(all);
+    if (mm && (mm.W_total || 0) > W_target_total + 1e-3) {
+      const Wcargo = allocs.reduce((s,a)=>s+(a.weight_mt||0),0);
+      const excess = (mm.W_total - W_target_total);
+      const f = (Wcargo - excess) / Math.max(1e-6, Wcargo);
+      const idToTank = new Map((tanks||[]).filter(t=>t&&t.included).map(t=>[t.id,t]));
+      allocs = allocs.map(a=>{
+        const t = idToTank.get(a.tank_id); const dens = (parcels.find(p=>p.id===a.parcel_id)?.density_kg_m3)||1000;
+        const v = Math.max((t.volume_m3||0)*(t.min_pct||0), (a.assigned_m3||0) * Math.max(0, f));
+        const fill = (t.volume_m3>0)?(v/t.volume_m3):0; const w=(v*dens)/1000;
+        return { tank_id:a.tank_id, parcel_id:a.parcel_id, assigned_m3:v, fill_pct:fill, weight_mt:w };
+      });
+      allocs = adjust(allocs);
+      all = allocs.concat(ballast||[]);
+      mm = computeHydroForAllocations(all);
+    }
+    return { allocations: allocs, ballastAllocations: ballast||[], diagnostics: res.diagnostics };
+  }
+  return { allocations: allocs, diagnostics: res.diagnostics };
+}
+
 function computeVariants() {
   ensureUniqueParcelIDs();
-  // Base plan and alternative selections (cargo-only)
-  const base = computePlan(tanks, parcels);
-  const alts = computePlanMinKAlternatives(tanks, parcels, 8);
-  // Expand candidate pool with other objective modes to increase diversity
-  const cMaxK = computePlanMaxK(tanks, parcels);
-  const cMinLocked = computePlanMaxRemaining(tanks, parcels);
-  const cWing = computePlanSingleWingAlternative(tanks, parcels);
-  const candidates = [base, ...alts, cMaxK, cMinLocked, cWing]
-    .filter(r => r && Array.isArray(r.allocations) && !(r?.diagnostics?.errors||[]).length);
-  // Helper: metrics
-  const metric = (r) => {
-    const m = computeHydroForAllocations(r.allocations || []);
-    const di = r.diagnostics || {};
-    return {
-      r,
-      W: (m && isFinite(m.DWT)) ? m.DWT : (r.allocations||[]).reduce((s,a)=>s+(a.weight_mt||0),0),
-      Trim: m ? m.Trim : Infinity,
-      Tf: m ? m.Tf : Infinity,
-      Tm: m ? m.Tm : Infinity,
-      Ta: m ? m.Ta : Infinity,
-      dps: isFinite(di.imbalance_pct) ? di.imbalance_pct : 0
-    };
-  };
-  const mets = candidates.map(metric).filter(m => isFinite(m.Tf) && isFinite(m.Tm) && isFinite(m.Ta));
-  // Enforce Dmax filter if target provided
-  const target = getReverseInputs && rsTargetDraftEl ? getReverseInputs().targetDraft : NaN;
-  const withinDmax = (m) => (!isFinite(target) || target <= 0) ? true : (Math.max(m.Tf, m.Tm, m.Ta) <= target + 1e-3);
-  const pool = mets.filter(withinDmax);
-  // Signature for deduping by allocation volumes
-  const sigOf = (res) => (res && Array.isArray(res.allocations))
-    ? res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${Number(a.assigned_m3||0).toFixed(3)}`).sort().join('|')
-    : '';
-  // Scoring functions
-  const absTrim = (m)=> Math.abs(m.Trim || 0);
-  const scoreEven = (m)=> ({ key: 'alt_even', m, sort: [absTrim(m), Math.abs(m.dps||0), -m.W] });
-  const scoreMax = (m)=> ({ key: 'alt_max', m, sort: [-m.W, absTrim(m), Math.abs(m.dps||0)] });
-  const scoreFwd = (m)=> ({ key: 'alt_fwd', m, sort: [ (m.Trim!=null ? (m.Trim<0 ? Math.abs(m.Trim) : 999) : 999), Math.abs(m.dps||0), -m.W ] });
-  function sortedBy(scoring) {
-    return pool
-      .map(scoring)
-      .sort((a,b)=>{
-        for (let i=0;i<Math.max(a.sort.length,b.sort.length);i++) {
-          const av = a.sort[i] ?? 0; const bv = b.sort[i] ?? 0;
-          if (av < bv) return -1; if (av > bv) return 1;
-        }
-        return 0;
-      })
-      .map(x => x.m.r || base);
-  }
-  function pickDistinct(scoring, takenSigs) {
-    const ordered = sortedBy(scoring);
-    for (const r of ordered) {
-      const s = sigOf(r);
-      if (!takenSigs.has(s)) { takenSigs.add(s); return r; }
-    }
-    return null;
-  }
-  const usedSigs = new Set();
-  // Always consider base as a valid fallback
-  usedSigs.add(sigOf(base));
-  // Build strict even-keel (no ballast) plan: max cargo -> Dmax -> Tf≈Ta
-  const altEven = computeEvenKeelStrict(tanks, parcels) || pickDistinct(scoreEven, usedSigs) || base;
-  const altMax = pickDistinct(scoreMax, usedSigs);
-  const altFwd = pickDistinct(scoreFwd, usedSigs);
-  // Build Max Cargo + Aft Ballast candidate: fill remaining at capacity, then ballast to meet Dmax
-  let maxCargoBallast = null;
-  try {
-    // Fill-remaining at capacity: ensure last parcel's total_m3 is undefined
-    const capParcels = parcels.map((p,i,arr) => (i===arr.length-1
-      ? { ...p, total_m3: undefined, fill_remaining: true }
-      : { ...p, fill_remaining: false }));
-    const capRes = computePlan(tanks, capParcels);
-    const capAlloc = Array.isArray(capRes.allocations) ? capRes.allocations : [];
-    if (capAlloc.length > 0) {
-      const capBallast = computeBallastForOptimum(capAlloc, { targetDraft: (isFinite(target)?target:undefined) });
-      maxCargoBallast = { allocations: capAlloc, ballastAllocations: Array.isArray(capBallast) ? capBallast : [] };
-    }
-  } catch {}
-  // Optimum: prefer Max Cargo + Ballast if available; otherwise evenkeel cargo + minimal ballast
-  let optimumRes;
-  if (maxCargoBallast && (maxCargoBallast.allocations||[]).length) {
-    optimumRes = maxCargoBallast;
-  } else {
-    const optBase = altEven;
-    const optBallast = computeBallastForOptimum(optBase?.allocations || [], { targetDraft: (isFinite(target)?target:undefined) });
-    optimumRes = { allocations: optBase?.allocations || [], ballastAllocations: optBallast || [] };
-  }
-  // Build variants map but omit duplicates/non-existent results
-  const out = {
-    optimum: { id: 'Optimum (ballast allowed)', res: optimumRes },
-    alt_evenkeel: { id: 'Alt 1 — Evenkeel (no ballast)', res: altEven }
-  };
-  const sigOpt = sigOf(optimumRes);
-  if (altMax && sigOf(altMax) !== sigOf(altEven) && sigOf(altMax) !== sigOpt) out['alt_maxdraft'] = { id: 'Alt 2 — Max Draft (no ballast)', res: altMax };
-  if (altFwd && sigOf(altFwd) !== sigOf(altEven) && sigOf(altFwd) !== sigOpt) out['alt_fwdtrim'] = { id: 'Alt 3 — Fwd Trim (no ballast)', res: altFwd };
-  // Fallbacks: ensure we always provide three distinct no-ballast alternatives
-  const needKeys = ['alt_maxdraft','alt_fwdtrim'];
-  const haveSigs = new Set([sigOf(optimumRes), sigOf(out.alt_evenkeel.res)]);
-  if (out.alt_maxdraft) haveSigs.add(sigOf(out.alt_maxdraft.res));
-  if (out.alt_fwdtrim) haveSigs.add(sigOf(out.alt_fwdtrim.res));
-  const distinctList = [];
-  const seen = new Set();
-  candidates.forEach(r => { const s = sigOf(r); if (!seen.has(s)) { seen.add(s); distinctList.push(r); } });
-  for (const k of needKeys) {
-    if (!out[k]) {
-      const pick = distinctList.find(r => !haveSigs.has(sigOf(r)) && sigOf(r) !== sigOf(out.alt_evenkeel.res));
-      if (pick) {
-        haveSigs.add(sigOf(pick));
-        out[k] = { id: (k==='alt_maxdraft' ? 'Alt 2 — Diversified' : 'Alt 3 — Diversified'), res: pick };
-      }
-    }
-  }
-  return out;
+  const res = computePlan_UserSpec();
+  return { optimum: { id: 'Plan — Max Cargo @ Dmax + Even Keel', res } };
 }
 
 function fillVariantSelect() {
@@ -1425,18 +1424,7 @@ function fillVariantSelect() {
 }
 
 function computeAndRender() {
-  // If user set a target draft and last parcel is Fill Remaining,
-  // interpret as "max cargo under target" and run upper-bound solver automatically.
-  try {
-    const inputs = (typeof getReverseInputs === 'function') ? getReverseInputs() : {};
-    const target = inputs ? inputs.targetDraft : NaN;
-    const fr = Array.isArray(parcels) && parcels.length > 0 ? !!parcels[parcels.length - 1].fill_remaining : false;
-    if (!solvingUpperBound && isFinite(target) && target > 0 && fr) {
-      solvingUpperBound = true;
-      reverseSolveAndRun().finally(() => { solvingUpperBound = false; });
-      return;
-    }
-  } catch {}
+  // Always compute the single user-spec plan
   variantsCache = computeVariants();
   // Dmax filter already applied in computeVariants
   fillVariantSelect();
