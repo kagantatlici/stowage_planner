@@ -1496,7 +1496,9 @@ function fillVariantSelect() {
   variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key===selectedVariantKey?'selected':''}>${o.label}</option>`).join('');
 }
 
-function computeAndRender() {
+async function computeAndRender() {
+  try { await ensureHydroLoaded(); } catch {}
+  try { await ensureLCGMapLoaded(); } catch {}
   // Always compute the single user-spec plan
   variantsCache = computeVariants();
   // Dmax filter already applied in computeVariants
@@ -2314,7 +2316,8 @@ function computeBallastForOptimum(cargoAllocs, opts) {
           const cap_m3 = (Number(p.P.cap_m3)||0) + (Number(p.S.cap_m3)||0);
           return { p, lcg, lever, cap_m3 };
         })
-        .filter(x => x.cap_m3 > 0 && x.lever * desir > 0 && Math.abs(x.lever) > 1e-6)
+        // Allow unknown capacity (cap_m3==0); Dmax clamp will limit via binary search
+        .filter(x => x.lever * desir > 0 && Math.abs(x.lever) > 1e-6)
         .sort((a,b)=> Math.abs(b.lever) - Math.abs(a.lever));
       if (ranked.length === 0) break;
       const pick = ranked[0];
