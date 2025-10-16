@@ -1,4 +1,7 @@
-import { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK } from './engine/stowage.js?v=6';
+// Dynamic cache-busted import for engine module
+const __cbParam = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
+const __ENGINE_URL = `./engine/stowage.js?cb=${__cbParam}`;
+const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK } = await import(__ENGINE_URL);
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
 // Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.

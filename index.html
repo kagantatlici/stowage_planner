@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tanker Stowage Planner (MVP)</title>
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" id="app-css" href="styles.css" />
   </head>
   <body>
     <header class="app-header">
@@ -117,6 +117,16 @@
         <small style="display:block; margin-top:6px; color:#9aa3b2;">Iframe stays loaded when switching tabs to keep your inputs.</small>
       </section>
     </main>
-    <script type="module" src="app.js?v=12"></script>
+    <script>
+      (function(){
+        var cb = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
+        var link = document.getElementById('app-css');
+        if (link) link.href = 'styles.css?cb=' + cb;
+      })();
+    </script>
+    <script type="module">
+      const cb = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
+      import(`./app.js?cb=${cb}`);
+    </script>
   </body>
   </html>
