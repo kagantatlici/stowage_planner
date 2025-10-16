@@ -2131,7 +2131,11 @@ async function ensureLCGMapLoaded() {
         // Also collect ballast tanks from file to use as fallback if Ship Data meta not loaded
         if (String(t.type||'').toLowerCase() === 'ballast') {
           const id = t.id || t.name;
-          if (id) ballastFromFile.push({ id, name: t.name || id, cap_m3: (typeof t.cap_m3 === 'number' ? t.cap_m3 : 0), lcg: Number(t.lcg)||0 });
+          if (id) {
+            ballastFromFile.push({ id, name: t.name || id, cap_m3: (typeof t.cap_m3 === 'number' ? t.cap_m3 : 0), lcg: Number(t.lcg)||0 });
+            // Register LCG so ballast contributes correct trim moment
+            map.set(id, Number(t.lcg));
+          }
         }
       });
     }
