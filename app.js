@@ -1484,7 +1484,62 @@ function computePlan_UserSpec() {
   const tol = 0.02; const maxT = (mm)=> Math.max(mm.Tf||0, mm.Tm||0, mm.Ta||0);
   if (!m || maxT(m) > target + tol) {
     // 4) Ballast to meet Dmax. If W exceeds target, reduce cargo equally
-    const ballast = computeBallastForOptimum(allocs, { targetDraft: target });
+    let ballast = computeBallastForOptimum(allocs, { targetDraft: target });
+    // Fallback: force ballast on extreme lever pair if none added
+    if (!ballast || ballast.length === 0) {
+      try {
+        const LCF = (interpHydro(HYDRO_ROWS, m.Tm||target) || {}).LCF || 0;
+        // Build ballast P/S pairs
+        const pairsMap = new Map();
+        const getSide = (s)=>/(\(|\s|\b)P(\)|\s|\b)$/.test(String(s||'').toUpperCase())? 'P' : (/(\(|\s|\b)S(\)|\s|\b)$/.test(String(s||'').toUpperCase())? 'S' : null);
+        const baseKey = (s)=> String(s||'').toUpperCase().trim().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+        (BALLAST_TANKS||[]).forEach(t => {
+          const id = t.id || t.name; if (!id) return;
+          const side = getSide(id); if (!side) return;
+          const key = baseKey(id);
+          const entry = pairsMap.get(key) || { P:null, S:null };
+          entry[side] = t; pairsMap.set(key, entry);
+        });
+        const pairs = []; pairsMap.forEach((v,k)=>{ if (v.P && v.S) pairs.push({ key:k, P:v.P, S:v.S }); });
+        const getLCG = (id, fallback)=> TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : (fallback ?? 0);
+        const trim = Number(m.Trim||0);
+        const ranked = pairs
+          .map(p => {
+            const lcg = ((getLCG(p.P.id, p.P.lcg) + getLCG(p.S.id, p.S.lcg)) / 2) || 0;
+            const lever = lcg - LCF;
+            return { p, lcg, lever };
+          })
+          .filter(x => (trim<0 ? x.lever<0 : x.lever>0))
+          .sort((a,b)=> Math.abs(b.lever) - Math.abs(a.lever));
+        if (ranked.length) {
+          const pick = ranked[0].p;
+          const rhoB = inputs.rho || (SHIP_PARAMS.RHO_REF || 1.025);
+          // Binary search ballast weight up to 6% of current displacement
+          const Wtot = Number(m.W_total||0);
+          let lo = 0, hi = Math.max(100, 0.06 * Wtot), best = 0;
+          let bestPair = null;
+          const build = (w)=>{
+            const wSide = w/2; const vSide = wSide / rhoB;
+            const pctP = (pick.P.cap_m3>0)? (vSide/pick.P.cap_m3*100): undefined;
+            const pctS = (pick.S.cap_m3>0)? (vSide/pick.S.cap_m3*100): undefined;
+            return [
+              { tank_id: pick.P.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctP },
+              { tank_id: pick.S.id, parcel_id: 'BALLAST', weight_mt: wSide, assigned_m3: vSide, percent: pctS }
+            ];
+          };
+          for (let it=0; it<22; it++) {
+            const w = (lo + hi) / 2;
+            const test = build(w);
+            const mt = computeHydroForAllocations(allocs.concat(test));
+            if (mt) {
+              const mx = maxT(mt);
+              if (mx <= target + 1e-3) { best = w; bestPair = test; lo = w; } else { hi = w; }
+            } else { hi = w; }
+          }
+          if (best > 1e-3 && bestPair) ballast = bestPair;
+        }
+      } catch {}
+    }
     let all = allocs.concat(ballast||[]);
     let mm = computeHydroForAllocations(all);
     if (mm && (mm.W_total || 0) > W_target_total + 1e-3) {
