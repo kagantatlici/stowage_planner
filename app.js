@@ -1588,6 +1588,7 @@ async function computePlan_UserSpec() {
     }
     let all = allocs.concat(ballast||[]);
     let mm = computeHydroForAllocations(all);
+    // Final mass clamp: if we overshoot target displacement, reduce cargo equally (respect mins)
     if (mm && (mm.W_total || 0) > W_target_total + 1e-3) {
       const Wcargo = allocs.reduce((s,a)=>s+(a.weight_mt||0),0);
       const excess = (mm.W_total - W_target_total);
@@ -1602,6 +1603,31 @@ async function computePlan_UserSpec() {
       allocs = adjust(allocs);
       all = allocs.concat(ballast||[]);
       mm = computeHydroForAllocations(all);
+    }
+    // Final draft clamp: if drafts still exceed target (due to LCG/LCB/MCT nuances), uniformly scale cargo down
+    if (mm) {
+      const maxT = Math.max(mm.Tf||0, mm.Tm||0, mm.Ta||0);
+      if (isFinite(target) && target > 0 && maxT > target + 1e-3) {
+        // Binary search a uniform scale on cargo to meet draft
+        const idToTank = new Map((tanks||[]).filter(t=>t&&t.included).map(t=>[t.id,t]));
+        const rhoMap = new Map((parcels||[]).map(p=>[p.id, Number(p.density_kg_m3)||1000]));
+        const scale = (s)=> allocs.map(a=>{
+          const t=idToTank.get(a.tank_id); const dens = rhoMap.get(a.parcel_id)||1000;
+          const v = Math.max((t.volume_m3||0)*(t.min_pct||0), (a.assigned_m3||0)*Math.max(0,s));
+          const fill=(t.volume_m3>0)?(v/t.volume_m3):0; const w=(v*dens)/1000;
+          return { tank_id:a.tank_id, parcel_id:a.parcel_id, assigned_m3:v, fill_pct:fill, weight_mt:w };
+        });
+        let lo=0, hi=1, best=allocs;
+        for (let it=0; it<28; it++) {
+          const s=(lo+hi)/2; const test=scale(s); const m2=computeHydroForAllocations(test.concat(ballast||[]));
+          const mx = m2 ? Math.max(m2.Tf||0, m2.Tm||0, m2.Ta||0) : Infinity;
+          if (mx <= target + 1e-3) { best=test; lo=s; } else { hi=s; }
+        }
+        allocs = best;
+        allocs = adjust(allocs);
+        all = allocs.concat(ballast||[]);
+        mm = computeHydroForAllocations(all);
+      }
     }
     return { allocations: allocs, ballastAllocations: ballast||[], ballastDebug: ballastDebug||null, diagnostics: res.diagnostics };
   }
