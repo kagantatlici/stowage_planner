@@ -968,45 +968,78 @@ function renderSummaryAndSvg(result) {
     // Allocations map (may be empty)
     const usedB = new Map();
     (ballastAllocs||[]).forEach(b => usedB.set(b.tank_id, b));
-    // Utilities for pairing and ordering
-    const getSide = (id)=> guessSideFromId(id) || 'port';
+    // Pair by base id and sort rows by LCG from Ship Data (bow/top first)
+    const getSide = (id)=> guessSideFromId(id) || null;
     const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
-    /** @type {Record<string,{P:any,S:any}>} */
-    const bpairs = {};
-    /** @type {string[]} */
-    const browKeys = [];
+    /** @type {Record<string,{P:any,S:any,centers:any[],lcg:number}>} */
+    const groups = {};
     BALLAST_TANKS.forEach(t => {
       const key = baseKey(t.id);
-      if (!bpairs[key]) { bpairs[key] = { P:null, S:null }; browKeys.push(key); }
+      if (!groups[key]) groups[key] = { P:null, S:null, centers:[], lcg: NaN };
       const side = getSide(t.id);
-      if (side === 'port') bpairs[key].P = t; else if (side === 'starboard') bpairs[key].S = t;
+      if (side === 'port') groups[key].P = t;
+      else if (side === 'starboard') groups[key].S = t;
+      else groups[key].centers.push(t);
+      // update representative LCG (average of available members with numeric lcg)
+      const vals = [];
+      if (Number.isFinite(t.lcg)) vals.push(Number(t.lcg));
+      if (Number.isFinite(groups[key].lcg)) vals.push(Number(groups[key].lcg));
+      groups[key].lcg = vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : groups[key].lcg;
     });
-    browKeys.forEach(key => {
+    const sorted = Object.keys(groups)
+      .map(k => ({ key:k, data:groups[k] }))
+      .sort((a,b) => {
+        const ax = Number.isFinite(a.data.lcg) ? a.data.lcg : -Infinity;
+        const bx = Number.isFinite(b.data.lcg) ? b.data.lcg : -Infinity;
+        return bx - ax; // larger LCG (forward) first → bow at top
+      });
+
+    const makeCell = (tank) => {
+      const cell = document.createElement('div'); cell.className = 'tank-cell';
+      if (!tank) { cell.innerHTML = '<div class="empty-hint">-</div>'; return cell; }
+      const a = usedB.get(tank.id);
+      const pct = (a && isFinite(a.percent)) ? Number(a.percent)
+        : (a && isFinite(a.assigned_m3) && isFinite(tank.cap_m3) && tank.cap_m3>0) ? (a.assigned_m3 / tank.cap_m3 * 100)
+        : NaN;
+      cell.innerHTML = `
+        <div class="id">${tank.id}</div>
+        ${a ? `
+          <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
+          <div class="meta">Fill: ${isFinite(pct)?pct.toFixed(1):'-'}%</div>
+          <div class="fillbar"><div style=\"height:${isFinite(pct)?pct.toFixed(1):'0'}%; background:#22d3ee\"></div></div>
+        ` : `
+          <div class="empty-hint">Ballast</div>
+          <div class="empty-hint">Volume</div>
+          <div class="empty-hint">%</div>
+        `}
+      `;
+      return cell;
+    };
+
+    sorted.forEach(({data}) => {
       const row = document.createElement('div'); row.className = 'tank-row';
-      const P = bpairs[key].P; const S = bpairs[key].S;
-      const addCell = (tank) => {
-        const cell = document.createElement('div'); cell.className = 'tank-cell';
-        if (!tank) { cell.innerHTML = '<div class="empty-hint">-</div>'; return cell; }
-        const a = usedB.get(tank.id);
-        const pct = (a && isFinite(a.percent)) ? Number(a.percent)
-          : (a && isFinite(a.assigned_m3) && isFinite(tank.cap_m3) && tank.cap_m3>0) ? (a.assigned_m3 / tank.cap_m3 * 100)
-          : NaN;
-        cell.innerHTML = `
-          <div class="id">${tank.id}</div>
-          ${a ? `
-            <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
-            <div class="meta">Fill: ${isFinite(pct)?pct.toFixed(1):'-'}%</div>
-            <div class="fillbar"><div style="height:${isFinite(pct)?pct.toFixed(1):'0'}%; background:#22d3ee"></div></div>
-          ` : `
-            <div class="empty-hint">Ballast</div>
-            <div class="empty-hint">Volume</div>
-            <div class="empty-hint">%</div>
-          `}
-        `;
-        return cell;
-      };
-      row.appendChild(addCell(P));
-      row.appendChild(addCell(S));
+      const hasCenter = data.centers && data.centers.length > 0;
+      const hasSides = !!(data.P || data.S);
+      if (hasCenter && !hasSides) {
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr';
+      } else if (hasCenter && hasSides) {
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr 1fr 1fr';
+      }
+      if (data.P || hasSides) row.appendChild(makeCell(data.P));
+      if (hasCenter) {
+        if (!hasSides) {
+          row.appendChild(makeCell(data.centers[0]));
+        } else {
+          const mid = document.createElement('div');
+          mid.style.display = 'grid';
+          mid.style.gridTemplateRows = `repeat(${data.centers.length}, minmax(100px, auto))`;
+          data.centers.forEach(ct => mid.appendChild(makeCell(ct)));
+          row.appendChild(mid);
+        }
+      }
+      if (data.S || hasSides) row.appendChild(makeCell(data.S));
       bhull.appendChild(row);
     });
     bCard.appendChild(bShip);
