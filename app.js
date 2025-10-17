@@ -5,7 +5,8 @@ const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, 
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
 // Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.
-const SHIP_PARAMS = { LBP: null, RHO_REF: null, LCG_FO_FW: null };
+// LCGs: prefer per-consumable (FO/FW/OTH) when available; fallback to averaged `LCG_FO_FW`.
+const SHIP_PARAMS = { LBP: null, RHO_REF: null, LCG_FO_FW: null, LCG_FO: null, LCG_FW: null, LCG_OTH: null };
 const LIGHT_SHIP = { weight_mt: null, lcg: null };
 let HYDRO_ROWS = null; // cached hydro rows from draft_calculator
 /** @type {Map<string, number>} */
@@ -459,16 +460,18 @@ function extractShipMetaFromProfile(profile) {
     }
     if (Object.keys(tank_lcgs).length) meta.tank_lcgs = tank_lcgs;
     if (ballast_tanks.length) meta.ballast_tanks = ballast_tanks;
-    // Approximate single consumables LCG from FO/FW/OTH if provided
+    // Consumables LCGs (FO/FW/OTH) — store individually if provided; also compute simple average as fallback
     if (p.tanks && Array.isArray(p.tanks.consumables)) {
       const cons = p.tanks.consumables;
       const pick = (type)=> cons.find(x => String(x.type||'').toLowerCase()===type);
       const fo = pick('fo'); const fw = pick('fw'); const oth = pick('oth');
       const vals = [fo, fw, oth].filter(x => x && isFinite(x.lcg)).map(x => Number(x.lcg));
-      if (vals.length > 0) {
-        const avg = vals.reduce((s,v)=>s+v,0)/vals.length;
-        meta.lcg_fo_fw = avg;
-      }
+      if (vals.length > 0) meta.lcg_fo_fw = vals.reduce((s,v)=>s+v,0)/vals.length;
+      meta.consumables_lcg = {
+        fo: (fo && isFinite(fo.lcg)) ? Number(fo.lcg) : null,
+        fw: (fw && isFinite(fw.lcg)) ? Number(fw.lcg) : null,
+        oth: (oth && isFinite(oth.lcg)) ? Number(oth.lcg) : null,
+      };
     }
     return meta;
   } catch { return null; }
@@ -484,6 +487,12 @@ function applyShipMeta(meta) {
       LIGHT_SHIP.lcg = Number(meta.light_ship.lcg);
     }
     if (isFinite(meta.lcg_fo_fw)) SHIP_PARAMS.LCG_FO_FW = Number(meta.lcg_fo_fw);
+    if (meta.consumables_lcg && typeof meta.consumables_lcg === 'object') {
+      const c = meta.consumables_lcg;
+      if (isFinite(c.fo)) SHIP_PARAMS.LCG_FO = Number(c.fo);
+      if (isFinite(c.fw)) SHIP_PARAMS.LCG_FW = Number(c.fw);
+      if (isFinite(c.oth)) SHIP_PARAMS.LCG_OTH = Number(c.oth);
+    }
     if (meta.hydrostatics && Array.isArray(meta.hydrostatics.rows) && meta.hydrostatics.rows.length) {
       HYDRO_ROWS = meta.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m);
     }
@@ -2359,11 +2368,22 @@ function computeHydroForAllocations(allocations) {
     W += w;
     Mx += w * (isFinite(x) ? x : 0);
   });
-  // consumables
-  const consLCG = SHIP_PARAMS.LCG_FO_FW;
-  const consW = (fo||0) + (fw||0) + (oth||0);
+  // consumables — use per-type LCGs when available; else fallback to average
+  const cons = {
+    fo: { w: (fo||0), x: (isFinite(SHIP_PARAMS.LCG_FO) ? SHIP_PARAMS.LCG_FO : null) },
+    fw: { w: (fw||0), x: (isFinite(SHIP_PARAMS.LCG_FW) ? SHIP_PARAMS.LCG_FW : null) },
+    oth:{ w: (oth||0), x: (isFinite(SHIP_PARAMS.LCG_OTH)? SHIP_PARAMS.LCG_OTH: null) }
+  };
+  const consW = cons.fo.w + cons.fw.w + cons.oth.w;
   W += consW;
-  if (isFinite(consLCG)) Mx += consW * consLCG;
+  const consMomentKnown = (cons.fo.w && cons.fo.x != null ? cons.fo.w*cons.fo.x : 0)
+                        + (cons.fw.w && cons.fw.x != null ? cons.fw.w*cons.fw.x : 0)
+                        + (cons.oth.w&& cons.oth.x!= null ? cons.oth.w*cons.oth.x: 0);
+  if (consMomentKnown !== 0) {
+    Mx += consMomentKnown;
+  } else if (isFinite(SHIP_PARAMS.LCG_FO_FW)) {
+    Mx += consW * SHIP_PARAMS.LCG_FO_FW;
+  }
   // constant
   if (constW && isFinite(constX)) { W += constW; Mx += constW * constX; }
   // lightship
