@@ -944,11 +944,19 @@ function renderSummaryAndSvg(result) {
   });
   // Cargo layout card
   const cargoCard = document.createElement('div');
+  const cargoLabel = document.createElement('div');
+  cargoLabel.style.cssText = 'margin:4px 0 8px; font-size:14px; color:#9aa3b2;';
+  cargoLabel.textContent = 'Cargo Tanks';
+  cargoCard.appendChild(cargoLabel);
   cargoCard.appendChild(ship);
   if (layoutGrid) layoutGrid.appendChild(cargoCard);
-  // Ballast layout card (if ballast allocations exist)
-  if ((ballastAllocs||[]).length > 0 && Array.isArray(BALLAST_TANKS) && BALLAST_TANKS.length > 0) {
+  // Ballast layout card (always shown if ballast tank metadata exists)
+  if (Array.isArray(BALLAST_TANKS) && BALLAST_TANKS.length > 0) {
     const bCard = document.createElement('div');
+    const bLabel = document.createElement('div');
+    bLabel.style.cssText = 'margin:4px 0 8px; font-size:14px; color:#9aa3b2;';
+    bLabel.textContent = 'Ballast Tanks';
+    bCard.appendChild(bLabel);
     const bShip = document.createElement('div');
     bShip.className = 'ship';
     bShip.innerHTML = `
@@ -957,61 +965,49 @@ function renderSummaryAndSvg(result) {
       <div class="stern"></div>
     `;
     const bhull = bShip.querySelector('#bhull');
-    // Build used ballast pair rows
+    // Allocations map (may be empty)
     const usedB = new Map();
     (ballastAllocs||[]).forEach(b => usedB.set(b.tank_id, b));
+    // Utilities for pairing and ordering
     const getSide = (id)=> guessSideFromId(id) || 'port';
     const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
     /** @type {Record<string,{P:any,S:any}>} */
     const bpairs = {};
+    /** @type {string[]} */
+    const browKeys = [];
     BALLAST_TANKS.forEach(t => {
-      if (!usedB.has(t.id)) return;
       const key = baseKey(t.id);
-      if (!bpairs[key]) bpairs[key] = { P:null, S:null };
+      if (!bpairs[key]) { bpairs[key] = { P:null, S:null }; browKeys.push(key); }
       const side = getSide(t.id);
       if (side === 'port') bpairs[key].P = t; else if (side === 'starboard') bpairs[key].S = t;
     });
-    const browKeys = Object.keys(bpairs);
     browKeys.forEach(key => {
-      const row = document.createElement('div');
-      row.className = 'tank-row';
+      const row = document.createElement('div'); row.className = 'tank-row';
       const P = bpairs[key].P; const S = bpairs[key].S;
-      // Port ballast cell
-      if (P) {
+      const addCell = (tank) => {
         const cell = document.createElement('div'); cell.className = 'tank-cell';
-        const a = usedB.get(P.id);
+        if (!tank) { cell.innerHTML = '<div class="empty-hint">-</div>'; return cell; }
+        const a = usedB.get(tank.id);
+        const pct = (a && isFinite(a.percent)) ? Number(a.percent)
+          : (a && isFinite(a.assigned_m3) && isFinite(tank.cap_m3) && tank.cap_m3>0) ? (a.assigned_m3 / tank.cap_m3 * 100)
+          : NaN;
         cell.innerHTML = `
-          <div class="id">${P.id}</div>
+          <div class="id">${tank.id}</div>
           ${a ? `
             <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
-            <div class="meta">Fill: ${isFinite(a.percent)?Number(a.percent).toFixed(1):'-'}%</div>
-            <div class="fillbar"><div style="height:${isFinite(a.percent)?Number(a.percent).toFixed(1):'0'}%; background:#22d3ee"></div></div>
+            <div class="meta">Fill: ${isFinite(pct)?pct.toFixed(1):'-'}%</div>
+            <div class="fillbar"><div style="height:${isFinite(pct)?pct.toFixed(1):'0'}%; background:#22d3ee"></div></div>
           ` : `
             <div class="empty-hint">Ballast</div>
             <div class="empty-hint">Volume</div>
             <div class="empty-hint">%</div>
           `}
         `;
-        bhull.appendChild(cell);
-      } else { const cell = document.createElement('div'); cell.className='tank-cell'; cell.innerHTML = '<div class="empty-hint">-</div>'; bhull.appendChild(cell); }
-      // Starboard ballast cell
-      if (S) {
-        const cell = document.createElement('div'); cell.className = 'tank-cell';
-        const a = usedB.get(S.id);
-        cell.innerHTML = `
-          <div class="id">${S.id}</div>
-          ${a ? `
-            <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
-            <div class="meta">Fill: ${isFinite(a.percent)?Number(a.percent).toFixed(1):'-'}%</div>
-            <div class="fillbar"><div style="height:${isFinite(a.percent)?Number(a.percent).toFixed(1):'0'}%; background:#22d3ee"></div></div>
-          ` : `
-            <div class="empty-hint">Ballast</div>
-            <div class="empty-hint">Volume</div>
-            <div class="empty-hint">%</div>
-          `}
-        `;
-        bhull.appendChild(cell);
-      } else { const cell = document.createElement('div'); cell.className='tank-cell'; cell.innerHTML = '<div class="empty-hint">-</div>'; bhull.appendChild(cell); }
+        return cell;
+      };
+      row.appendChild(addCell(P));
+      row.appendChild(addCell(S));
+      bhull.appendChild(row);
     });
     bCard.appendChild(bShip);
     if (layoutGrid) layoutGrid.appendChild(bCard);
