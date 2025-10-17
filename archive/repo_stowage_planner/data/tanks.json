@@ -1,0 +1,34 @@
+{
+  "tanks": [
+    { "name": "F.P. TK (C)", "lcg": 80.567, "type": "ballast" },
+
+    { "name": "NO.1 W.B.TK (P)", "lcg": 65.051, "type": "ballast" },
+    { "name": "NO.1 W.B.TK (S)", "lcg": 65.024, "type": "ballast" },
+    { "name": "NO.2 W.B.TK (P)", "lcg": 44.425, "type": "ballast" },
+    { "name": "NO.2 W.B.TK (S)", "lcg": 44.425, "type": "ballast" },
+    { "name": "NO.3 W.B.TK (P)", "lcg": 23.534, "type": "ballast" },
+    { "name": "NO.3 W.B.TK (S)", "lcg": 23.542, "type": "ballast" },
+    { "name": "NO.4 W.B.TK (P)", "lcg": 2.654,  "type": "ballast" },
+    { "name": "NO.4 W.B.TK (S)", "lcg": 2.662,  "type": "ballast" },
+    { "name": "NO.5 W.B.TK (P)", "lcg": -18.136, "type": "ballast" },
+    { "name": "NO.5 W.B.TK (S)", "lcg": -18.136, "type": "ballast" },
+    { "name": "NO.6 W.B.TK (P)", "lcg": -41.772, "type": "ballast" },
+    { "name": "NO.6 W.B.TK (S)", "lcg": -41.772, "type": "ballast" },
+    { "name": "A.P. TK (C)",  "lcg": -84.902, "type": "ballast" },
+
+    { "name": "NO.1 CARGO TK (P)", "lcg": 63.315,  "cap_m3": 2807.8, "type": "cargo" },
+    { "name": "NO.1 CARGO TK (S)", "lcg": 63.315,  "cap_m3": 2807.8, "type": "cargo" },
+    { "name": "NO.2 CARGO TK (P)", "lcg": 43.497,  "cap_m3": 3908.0, "type": "cargo" },
+    { "name": "NO.2 CARGO TK (S)", "lcg": 43.497,  "cap_m3": 3908.0, "type": "cargo" },
+    { "name": "NO.3 CARGO TK (P)", "lcg": 22.677,  "cap_m3": 3943.4, "type": "cargo" },
+    { "name": "NO.3 CARGO TK (S)", "lcg": 22.677,  "cap_m3": 3943.4, "type": "cargo" },
+    { "name": "NO.4 CARGO TK (P)", "lcg": 1.797,   "cap_m3": 3943.4, "type": "cargo" },
+    { "name": "NO.4 CARGO TK (S)", "lcg": 1.797,   "cap_m3": 3943.4, "type": "cargo" },
+    { "name": "NO.5 CARGO TK (P)", "lcg": -19.082, "cap_m3": 3942.7, "type": "cargo" },
+    { "name": "NO.5 CARGO TK (S)", "lcg": -19.082, "cap_m3": 3942.7, "type": "cargo" },
+    { "name": "NO.6 CARGO TK (P)", "lcg": -39.338, "cap_m3": 3606.3, "type": "cargo" },
+    { "name": "NO.6 CARGO TK (S)", "lcg": -39.338, "cap_m3": 3606.3, "type": "cargo" },
+    { "name": "SLOP TK (P)",       "lcg": -51.337, "cap_m3": 612.8,  "type": "cargo" },
+    { "name": "SLOP TK (S)",       "lcg": -51.337, "cap_m3": 612.8,  "type": "cargo" }
+  ]
+}

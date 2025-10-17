@@ -10,7 +10,7 @@ How to use
 - Use Tank Editor to adjust volumes, min/max, and inclusion.
 - Use Cargo Input to define parcels. Ensure only the last parcel has `fill_remaining` enabled.
 - Click "Load T10 Example" to preload the regression case (8×3000 m³; 11k Gasoline, 5k Jet A-1, remainder Gasoil) and then click "Compute Plan".
-- Distribution Result shows P/S weights, balance tag, SVG layout, and a reasoning trace.
+- Distribution Result shows P/S weights, balance tag, a layout summary, and a reasoning trace.
 
 Regression test (CLI)
 ---------------------
@@ -35,3 +35,8 @@ Notes
 - Center tanks are supported and used only when odd k is chosen and a center exists.
 - P/S balance excludes center tank weight.
 
+Maintenance
+-----------
+
+- The HTML layout is rendered via HTML/CSS (no SVG). The previous `#svg-container` placeholder has been removed as unused.
+- The folder has been archived under `archive/repo_stowage_planner/` and kept only for reference; the active app sources are the files at the repository root (`index.html`, `app.js`, `styles.css`, `engine/`).

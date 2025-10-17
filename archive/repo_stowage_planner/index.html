@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tanker Stowage Planner (MVP)</title>
-    <link rel="stylesheet" id="app-css" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=4" />
   </head>
   <body>
     <header class="app-header">
@@ -14,9 +14,9 @@
           <button class="tab" data-view="config">Tank Config</button>
           <button class="tab active" data-view="cargo">Cargo & Allocation</button>
           <button class="tab" data-view="layout">Layout Plan</button>
-          <button class="tab" data-view="shipdata" title="Draft & Trim Calculator">Ship Data</button>
         </div>
         <div class="actions">
+          <a href="./ship_data.html" class="btn-secondary" style="margin-right:8px;" title="Open Ship Data (Draft & Trim)">Ship Data</a>
           <button id="btn-compute" class="btn-primary">Run Stowage Options</button>
         </div>
       </div>
@@ -90,8 +90,6 @@
         <hr style="border: none; border-top: 1px solid #1b254a; margin: 12px 0;" />
         <h3 style="margin:8px 0; font-size:14px;">Allocated Tanks</h3>
         <div id="alloc-table"></div>
-        <h3 style="margin:12px 0 8px; font-size:14px;">Ballast Allocations</h3>
-        <div id="ballast-table"></div>
         <h3 style="margin:12px 0 8px; font-size:14px;">Parcels Summary</h3>
         <div id="parcel-table"></div>
         <div id="warnings" class="warn"></div>
@@ -102,30 +100,13 @@
           <button id="btn-export-json">Export JSON</button>
           <label for="plan-variant" style="color:#9aa3b2; font-size:13px;">Plan Options</label>
           <select id="plan-variant" style="min-width:220px;"></select>
-          <button id="btn-transfer-shipdata" class="btn-primary" title="Send current allocations to Ship Data">Transfer to Ship Data</button>
         </div>
         <div id="hydro-summary" class="card" style="margin-bottom:10px; display:none;"></div>
         <div id="layout-grid" class="layout-wrap"></div>
+        <div id="svg-container" class="svg-wrap" style="display:none;"></div>
         <!-- Reasoning trace hidden in UI -->
       </section>
-      <section id="view-shipdata" class="panel view">
-        <h2>Ship Data — Draft & Trim</h2>
-        <div class="card shipdata-frame">
-          <iframe src="https://kagantatlici.github.io/draft_calculator/"></iframe>
-        </div>
-        <small style="display:block; margin-top:6px; color:#9aa3b2;">Iframe stays loaded when switching tabs to keep your inputs.</small>
-      </section>
     </main>
-    <script>
-      (function(){
-        var cb = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
-        var link = document.getElementById('app-css');
-        if (link) link.href = 'styles.css?cb=' + cb;
-      })();
-    </script>
-    <script type="module">
-      const cb = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
-      import(`./app.js?cb=${cb}`);
-    </script>
+    <script type="module" src="app.js?v=4"></script>
   </body>
   </html>
