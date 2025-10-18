@@ -2235,7 +2235,7 @@ async function buildCompactExportText() {
     const m = computeHydroForAllocations([...(res.allocations||[]), ...((res.ballastAllocations||res.ballast_allocations)||[])]);
     if (m) {
       const H = interpHydro(HYDRO_ROWS, m.Tm || 0) || {};
-      hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf||0).toFixed(3)} Tm=${(m.Tm||0).toFixed(3)} Ta=${(m.Ta||0).toFixed(3)} Trim=${(m.Trim||0).toFixed(3)} LCF=${isFinite(H.LCF)?H.LCF.toFixed(2):'-'} LBP=${isFinite(SHIP_PARAMS.LBP)?SHIP_PARAMS.LBP.toFixed(2):'-'} rho=${isFinite(getReverseInputs().rho)?String(getReverseInputs().rho):String(SHIP_PARAMS.RHO_REF)}`;
+      hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf||0).toFixed(3)} Tm=${(m.Tm||0).toFixed(3)} Ta=${(m.Ta||0).toFixed(3)} Trim=${(m.Trim||0).toFixed(3)} LCF=${isFinite(m.LCF)?m.LCF.toFixed(2):'-'} LBP=${isFinite(SHIP_PARAMS.LBP)?SHIP_PARAMS.LBP.toFixed(2):'-'} rho=${isFinite(getReverseInputs().rho)?String(getReverseInputs().rho):String(SHIP_PARAMS.RHO_REF)}`;
     }
   } catch {}
   const lines = [
@@ -2464,6 +2464,30 @@ function getReverseInputs() {
 
 function computeHydroForAllocations(allocations) {
   if (!HYDRO_ROWS || !allocations) return null;
+  // Safe linear interpolation against hydro table (guards against any external mutation)
+  function interpHydroSafe(rows, T) {
+    try {
+      const rr = Array.isArray(rows) ? rows.slice().sort((a,b)=>a.draft_m-b.draft_m) : [];
+      if (!rr.length || !isFinite(T)) return null;
+      const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
+      const toFW = (r) => (typeof r.dis_fw === 'number') ? r.dis_fw : ((typeof r.dis_sw === 'number') ? (r.dis_sw / rho_ref) : undefined);
+      // clamp
+      if (T <= rr[0].draft_m) {
+        const r=rr[0]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) };
+      }
+      if (T >= rr[rr.length-1].draft_m) {
+        const r=rr[rr.length-1]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) };
+      }
+      let lo=0, hi=rr.length-1;
+      while (hi-lo>1) { const mid=(lo+hi)>>1; if (rr[mid].draft_m<=T) lo=mid; else hi=mid; }
+      const a=rr[lo], b=rr[hi];
+      const t=(T-a.draft_m)/(b.draft_m-a.draft_m);
+      const lerp=(x,y)=> x + (y-x)*t;
+      const aFW = toFW(a), bFW = toFW(b);
+      const DIS_FW = (isFinite(aFW)&&isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
+      return { LCF: lerp(a.lcf_m,b.lcf_m), LCB: lerp(a.lcb_m,b.lcb_m), TPC: lerp(a.tpc,b.tpc), MCT1cm: lerp(a.mct,b.mct), DIS_FW };
+    } catch { return null; }
+  }
   // Build items
   const inputs = getReverseInputs();
   const { rho, fo, fw, oth, constW, constX } = inputs;
@@ -2503,7 +2527,8 @@ function computeHydroForAllocations(allocations) {
   const LCG = Mx / W;
   const Tm = solveDraftByDisFW(HYDRO_ROWS, W / rho);
   if (!isFinite(Tm)) return null;
-  const H = interpHydro(HYDRO_ROWS, Tm);
+  // Use safe interpolator strictly
+  const H = interpHydroSafe(HYDRO_ROWS, Tm) || { LCF:0, LCB:0, TPC:undefined, MCT1cm:undefined, DIS_FW:undefined };
   // Use LCB for trim moment, sign convention: stern trim (+)
   const LCB = (H && typeof H.LCB === 'number') ? H.LCB : 0;
   const MCT = (H && typeof H.MCT1cm === 'number' && H.MCT1cm !== 0) ? H.MCT1cm : null;
