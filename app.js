@@ -2,6 +2,8 @@
 const __cbParam = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
 const __ENGINE_URL = `./engine/stowage.js?cb=${__cbParam}`;
 const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK } = await import(__ENGINE_URL);
+const __HYDRO_URL = `./engine/hydro_shipdata.js?cb=${__cbParam}`;
+const { computeHydroShip, solveDraftByDisFWShip, interpHydroShip } = await import(__HYDRO_URL);
 
 // Reverse-solver: minimal hydro + LCG integration (from draft_calculator data)
 // Do NOT hardcode ship hydrostatics; these are set from imported/active ship meta.
@@ -796,7 +798,7 @@ function renderSummaryAndSvg(result) {
       if (!HYDRO_ROWS) await ensureHydroLoaded();
       if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) { hbox.style.display = 'none'; return; }
       const allAllocs = allocations.concat(ballastAllocs || []);
-      const metrics = await computeHydroForAllocations(allAllocs);
+      const metrics = computeHydroForAllocations(allAllocs);
       if (!metrics) { hbox.style.display = 'none'; return; }
       const { W_total, DWT, Tf, Tm, Ta, Trim } = metrics;
       hbox.style.display = 'block';
@@ -2454,7 +2456,7 @@ function getReverseInputs() {
   };
 }
 
-async function computeHydroForAllocations(allocations) {
+function computeHydroForAllocations(allocations) {
   if (!HYDRO_ROWS || !allocations) return null;
   // Safe linear interpolation against hydro table (guards against any external mutation)
   function interpHydroSafe(rows, T) {
@@ -2519,8 +2521,7 @@ async function computeHydroForAllocations(allocations) {
   const LCG = Mx / W;
   const rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF>0) ? SHIP_PARAMS.RHO_REF : 1.025;
   const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
-  const mod = await import('./engine/hydro_shipdata.js?cb='+(__cbParam||Date.now()));
-  const Hship = mod.computeHydroShip(HYDRO_ROWS, W, LCG, LBP, rho_ref);
+  const Hship = computeHydroShip(HYDRO_ROWS, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP? (LBP/2)+(Hship.LCF||0):undefined), dFP: (LBP? (LBP/2)-(Hship.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
