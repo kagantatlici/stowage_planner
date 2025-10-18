@@ -2396,32 +2396,22 @@ async function ensureLCGMapLoaded() {
 }
 
 function interpHydro(rows, T) {
-  if (!rows || rows.length === 0 || !isFinite(T)) return null;
-  const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
-  const getDISFW = (r) => {
-    const fw = (r && typeof r.dis_fw === 'number') ? r.dis_fw : null;
-    if (isFinite(fw)) return fw;
-    const sw = (r && typeof r.dis_sw === 'number') ? r.dis_sw : null;
-    return isFinite(sw) ? (sw / rho_ref) : undefined;
-  };
-  if (T <= rows[0].draft_m) return {
-    LCF: rows[0].lcf_m, LCB: rows[0].lcb_m, TPC: rows[0].tpc, MCT1cm: rows[0].mct, DIS_FW: getDISFW(rows[0])
-  };
-  if (T >= rows[rows.length - 1].draft_m) {
-    const r = rows[rows.length - 1];
-    return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: getDISFW(r) };
-  }
-  let lo = 0, hi = rows.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (rows[mid].draft_m <= T) lo = mid; else hi = mid;
-  }
-  const a = rows[lo], b = rows[hi];
-  const t = (T - a.draft_m) / (b.draft_m - a.draft_m);
-  const lerp = (x,y)=> x + (y - x) * t;
-  const aFW = getDISFW(a); const bFW = getDISFW(b);
-  const DIS_FW = (isFinite(aFW) && isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
-  return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW };
+  try {
+    if (!rows || rows.length === 0 || !isFinite(T)) return null;
+    const rr = rows.slice().sort((a,b)=>a.draft_m-b.draft_m);
+    const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
+    const toFW = (r) => (typeof r.dis_fw === 'number') ? r.dis_fw : ((typeof r.dis_sw === 'number') ? (r.dis_sw / rho_ref) : undefined);
+    if (T <= rr[0].draft_m) { const r=rr[0]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) }; }
+    if (T >= rr[rr.length - 1].draft_m) { const r=rr[rr.length-1]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) }; }
+    let lo = 0, hi = rr.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (rr[mid].draft_m <= T) lo = mid; else hi = mid; }
+    const a = rr[lo], b = rr[hi];
+    const t = (T - a.draft_m) / (b.draft_m - a.draft_m);
+    const lerp = (x,y)=> x + (y - x) * t;
+    const aFW = toFW(a), bFW = toFW(b);
+    const DIS_FW = (isFinite(aFW) && isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
+    return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW };
+  } catch { return null; }
 }
 
 function solveDraftByDisFW(rows, target_dis_fw) {
@@ -2546,7 +2536,7 @@ function computeHydroForAllocations(allocations) {
   }
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   // Include internals for debugging/export parity with Ship Data
-  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'safe_v2' };
+  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_v1' };
 }
 
 // Compute minimal symmetric ballast (P/S pairs) to meet strict trim tolerance for Optimum variant.
