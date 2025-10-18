@@ -120,7 +120,8 @@ const APP_BUILD = (() => {
         dynamic_import: true,
         evenkeel_strict: true,
         ballast_lcg_mapped: true,
-        ballast_dmax_binary_search: true
+        ballast_dmax_binary_search: true,
+        hydro_interp_safe: true
       }
     };
   } catch (_) {
@@ -2544,7 +2545,7 @@ function computeHydroForAllocations(allocations) {
   }
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   // Include internals for debugging/export parity with Ship Data
-  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS };
+  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'safe_v2' };
 }
 
 // Compute minimal symmetric ballast (P/S pairs) to meet strict trim tolerance for Optimum variant.
