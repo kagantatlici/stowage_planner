@@ -9,6 +9,7 @@ const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, 
 const SHIP_PARAMS = { LBP: null, RHO_REF: null, LCG_FO_FW: null, LCG_FO: null, LCG_FW: null, LCG_OTH: null };
 const LIGHT_SHIP = { weight_mt: null, lcg: null };
 let HYDRO_ROWS = null; // cached hydro rows from draft_calculator
+let HYDRO_META = null; // optional meta: source, units, rowsCount
 /** @type {Map<string, number>} */
 let TANK_LCG_MAP = new Map(); // map tank_id -> lcg (midship +forward)
 /** Ballast tanks metadata imported from Ship Data (if available) */
@@ -2226,17 +2227,65 @@ function buildCompactExportText() {
 btnExportJson.addEventListener('click', async (ev) => {
   try {
     if (ev && ev.shiftKey) {
-      // Previous behavior: export verbose JSON for all plan options
+      // Verbose JSON export with debug to aid analysis
       if (!variantsCache) variantsCache = computeVariants();
       const plans = {};
       Object.entries(variantsCache).forEach(([key, entry]) => {
         const { id, res } = entry;
-        plans[key] = { label: id, allocations: res.allocations || [], ballastAllocations: (res.ballastAllocations||res.ballast_allocations)||[], ballastDebug: res.ballastDebug || null, diagnostics: res.diagnostics || null };
+        const allocs = res.allocations || [];
+        const ball = (res.ballastAllocations||res.ballast_allocations)||[];
+        const hydro = (function(){ try { return computeHydroForAllocations([ ...allocs, ...ball ]); } catch { return null; } })();
+        // include per-plan hydro metrics for quick diagnosis
+        plans[key] = {
+          label: id,
+          allocations: allocs,
+          ballastAllocations: ball,
+          ballastDebug: res.ballastDebug || null,
+          diagnostics: res.diagnostics || null,
+          hydro
+        };
       });
-      const data = { build: APP_BUILD, tanks, parcels, plans };
+      // Build debug block
+      const chosen = (function(){ const k = selectedVariantKey; return variantsCache[k] || variantsCache['optimum']; })();
+      const chosenRes = chosen?.res || computePlan(tanks, parcels);
+      const chosenAllocs = chosenRes.allocations || [];
+      const chosenBall = (chosenRes.ballastAllocations||chosenRes.ballast_allocations)||[];
+      const usedIds = new Set([...chosenAllocs, ...chosenBall].map(a=>a.tank_id));
+      const lcg_used = Array.from(usedIds).map(id => ({ id, lcg: (TANK_LCG_MAP.has(id)? Number(TANK_LCG_MAP.get(id)) : null) }));
+      const revInputs = (function(){ try { return getReverseInputs(); } catch { return null; } })();
+      const hydroMeta = (function(){ try { return HYDRO_META || (HYDRO_ROWS? { source: null, units: null, rowsCount: HYDRO_ROWS.length } : null); } catch { return null; } })();
+      const hydroChosen = (function(){ try { return computeHydroForAllocations([ ...chosenAllocs, ...chosenBall ]); } catch { return null; } })();
+      // Short signature over current inputs + chosen allocations
+      const sigJson = JSON.stringify({
+        t: tanks.map(t => ({ id: t.id, v: t.volume_m3, a: t.min_pct, b: t.max_pct, i: !!t.included })),
+        p: parcels.map(p => ({ id: p.id, v: p.total_m3, r: p.density_kg_m3, t: p.temperature_c, fr: !!p.fill_remaining })),
+        a: chosenAllocs.map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 })),
+        b: chosenBall.map(b => ({ t: b.tank_id, v: b.assigned_m3 }))
+      });
+      const sig = quickHash(sigJson);
+
+      const debug = {
+        version: 'debug-export-v2',
+        location: (typeof location !== 'undefined' ? String(location.href) : null),
+        userAgent: (typeof navigator !== 'undefined' ? String(navigator.userAgent||'') : null),
+        selectedVariantKey,
+        selectedVariantLabel: chosen?.id || null,
+        cb: (APP_BUILD && APP_BUILD.cb) || null,
+        engine_url: (typeof __ENGINE_URL !== 'undefined' ? __ENGINE_URL : null),
+        build: APP_BUILD,
+        ship: { SHIP_PARAMS, LIGHT_SHIP },
+        hydro_meta: hydroMeta,
+        reverse_inputs: revInputs,
+        lcg: { known_count: (TANK_LCG_MAP && TANK_LCG_MAP.size) ? TANK_LCG_MAP.size : 0, used: lcg_used },
+        ballast_meta: Array.isArray(BALLAST_TANKS) ? BALLAST_TANKS : [],
+        hydro_chosen: hydroChosen,
+        signature: sig
+      };
+
+      const data = { build: APP_BUILD, tanks, parcels, plans, debug };
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
-      alert('Copied ALL plan options JSON to clipboard.');
+      alert('Copied ALL plan options + debug JSON to clipboard.');
       return;
     }
   } catch {}
@@ -2269,6 +2318,7 @@ async function ensureHydroLoaded() {
     if (!res.ok) return null;
     const json = await res.json();
     const rows = Array.isArray(json.rows) ? json.rows : [];
+    try { HYDRO_META = { source: json.source || null, units: json.units || null, rowsCount: rows.length }; } catch {}
     HYDRO_ROWS = rows.sort((a,b)=>a.draft_m - b.draft_m);
     return HYDRO_ROWS;
   } catch { return null; }
