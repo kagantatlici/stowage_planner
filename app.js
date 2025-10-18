@@ -1641,6 +1641,14 @@ async function computeVariants() {
   return { optimum: { id: 'Plan — Max Cargo @ Dmax + Even Keel', res } };
 }
 
+function isPromise(v) { return !!(v && typeof v.then === 'function'); }
+async function ensureVariants() {
+  if (!variantsCache || isPromise(variantsCache)) {
+    variantsCache = await computeVariants();
+  }
+  return variantsCache;
+}
+
 function fillVariantSelect() {
   if (!variantSelect) return;
   const order = ['optimum','alt_evenkeel','alt_maxdraft','alt_fwdtrim'];
@@ -1690,11 +1698,11 @@ function render() {
 
 btnCompute.addEventListener('click', computeAndRender);
 if (variantSelect) {
-  variantSelect.addEventListener('change', () => {
+  variantSelect.addEventListener('change', async () => {
     selectedVariantKey = variantSelect.value;
     try { localStorage.setItem(LS_VARIANT, selectedVariantKey); } catch {}
     // Recompute variants on selection change to ensure fresh scoring under current inputs
-    variantsCache = computeVariants();
+    await ensureVariants();
     const v = variantsCache[selectedVariantKey] || variantsCache['optimum'];
     renderSummaryAndSvg(v.res);
   });
@@ -1774,9 +1782,9 @@ try {
 try { computeAndRender(); } catch {}
 
 // Build payload to transfer current plan to Ship Data (draft calculator)
-function buildShipDataTransferPayload() {
+async function buildShipDataTransferPayload() {
   try {
-    if (!variantsCache) variantsCache = computeVariants();
+    await ensureVariants();
     const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['optimum']);
     const res = chosen && chosen.res;
     if (!res || !Array.isArray(res.allocations) || res.allocations.length === 0) return null;
@@ -1856,7 +1864,19 @@ function postPlanToShipData() {
 }
 
 if (btnTransferShipData) {
-  btnTransferShipData.addEventListener('click', postPlanToShipData);
+  btnTransferShipData.addEventListener('click', async () => {
+    try {
+      const frame = document.querySelector('#view-shipdata iframe');
+      if (!frame || !frame.contentWindow) { alert('Ship Data view is not available.'); return; }
+      const payload = await buildShipDataTransferPayload();
+      if (!payload) { alert('No computed allocations to transfer. Run the planner first.'); return; }
+      const msg = { type: 'apply_stowage_plan', payload };
+      let targetOrigin = '*';
+      try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
+      frame.contentWindow.postMessage(msg, targetOrigin || '*');
+      setActiveView('shipdata');
+    } catch (_) { alert('Transfer failed.'); }
+  });
 }
 
 // Config preset actions
@@ -2112,9 +2132,9 @@ function fmtVol(v) {
   return Math.abs(iv - v) < 1e-6 ? String(iv) : v.toFixed(1);
 }
 
-function buildCompactExportText() {
+async function buildCompactExportText() {
   // Choose currently selected plan (fallback min_k)
-  if (!variantsCache) variantsCache = computeVariants();
+  await ensureVariants();
   const chosen = variantsCache[selectedVariantKey] || variantsCache['optimum'];
   const res = chosen?.res || computePlan(tanks, parcels);
   const di = res?.diagnostics || {};
@@ -2228,7 +2248,7 @@ btnExportJson.addEventListener('click', async (ev) => {
   try {
     if (ev && ev.shiftKey) {
       // Verbose JSON export with debug to aid analysis
-      if (!variantsCache) variantsCache = computeVariants();
+      await ensureVariants();
       const plans = {};
       Object.entries(variantsCache).forEach(([key, entry]) => {
         const { id, res } = entry;
@@ -2290,7 +2310,7 @@ btnExportJson.addEventListener('click', async (ev) => {
     }
   } catch {}
 
-  const compact = buildCompactExportText();
+  const compact = await buildCompactExportText();
   try {
     await navigator.clipboard.writeText(compact);
     alert('Kısa çıktı panoya kopyalandı. (Shift = tam JSON)');
