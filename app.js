@@ -796,7 +796,7 @@ function renderSummaryAndSvg(result) {
       if (!HYDRO_ROWS) await ensureHydroLoaded();
       if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) { hbox.style.display = 'none'; return; }
       const allAllocs = allocations.concat(ballastAllocs || []);
-      const metrics = computeHydroForAllocations(allAllocs);
+      const metrics = await computeHydroForAllocations(allAllocs);
       if (!metrics) { hbox.style.display = 'none'; return; }
       const { W_total, DWT, Tf, Tm, Ta, Trim } = metrics;
       hbox.style.display = 'block';
@@ -2454,7 +2454,7 @@ function getReverseInputs() {
   };
 }
 
-function computeHydroForAllocations(allocations) {
+async function computeHydroForAllocations(allocations) {
   if (!HYDRO_ROWS || !allocations) return null;
   // Safe linear interpolation against hydro table (guards against any external mutation)
   function interpHydroSafe(rows, T) {
@@ -2482,7 +2482,7 @@ function computeHydroForAllocations(allocations) {
   }
   // Build items
   const inputs = getReverseInputs();
-  const { rho, fo, fw, oth, constW, constX } = inputs;
+  const { fo, fw, oth, constW, constX } = inputs;
   let W = 0, Mx = 0;
   const LCG_BIAS = getLCGBias();
   // cargo allocations
@@ -2517,26 +2517,13 @@ function computeHydroForAllocations(allocations) {
   }
   if (!(W > 0)) return null;
   const LCG = Mx / W;
-  const Tm = solveDraftByDisFW(HYDRO_ROWS, W / rho);
-  if (!isFinite(Tm)) return null;
-  // Use safe interpolator strictly
-  const H = interpHydroSafe(HYDRO_ROWS, Tm) || { LCF:0, LCB:0, TPC:undefined, MCT1cm:undefined, DIS_FW:undefined };
-  // Use LCB for trim moment, sign convention: stern trim (+)
-  const LCB = (H && typeof H.LCB === 'number') ? H.LCB : 0;
-  const MCT = (H && typeof H.MCT1cm === 'number' && H.MCT1cm !== 0) ? H.MCT1cm : null;
-  const trim_cm = (MCT ? ( - (W * (LCG - LCB)) / MCT ) : 0);
-  const trim_m = trim_cm / 100.0;
+  const rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF>0) ? SHIP_PARAMS.RHO_REF : 1.025;
   const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
-  let Tf = Tm, Ta = Tm;
-  if (LBP) {
-    const dAP = (LBP/2) + (H?.LCF || 0);
-    const dFP = (LBP/2) - (H?.LCF || 0);
-    Tf = Tm - trim_m * (dFP / LBP);
-    Ta = Tm + trim_m * (dAP / LBP);
-  }
+  const mod = await import('./engine/hydro_shipdata.js?cb='+(__cbParam||Date.now()));
+  const Hship = mod.computeHydroShip(HYDRO_ROWS, W, LCG, LBP, rho_ref);
+  if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
-  // Include internals for debugging/export parity with Ship Data
-  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_v1' };
+  return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP? (LBP/2)+(Hship.LCF||0):undefined), dFP: (LBP? (LBP/2)-(Hship.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
 }
 
 // Compute minimal symmetric ballast (P/S pairs) to meet strict trim tolerance for Optimum variant.
