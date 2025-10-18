@@ -2260,7 +2260,8 @@ btnExportJson.addEventListener('click', async (ev) => {
   try {
     if (ev && ev.shiftKey) {
       // Verbose JSON export with debug to aid analysis
-      await ensureVariants();
+      // Force fresh recompute to avoid stale caches after code updates
+      variantsCache = await computeVariants();
       const plans = {};
       Object.entries(variantsCache).forEach(([key, entry]) => {
         const { id, res } = entry;
