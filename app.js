@@ -31,6 +31,34 @@ let BALLAST_TANKS = [];
 const TOL_TRIM_M = 0.02;   // m
 const TOL_PS_PCT = 0.2;    // percent
 
+// ---- Ship Data (Draft Calculator) raw access helpers ----
+function getDCHydroRowsRaw() {
+  try {
+    const id = localStorage.getItem('dc_active_ship');
+    if (!id) return null;
+    const raw = localStorage.getItem('dc_ship_' + id);
+    if (!raw) return null;
+    const prof = JSON.parse(raw);
+    // Accept both shapes: {hydrostatics:{rows:[]}} or {hydrostatics:[]}
+    const rows = Array.isArray(prof?.hydrostatics?.rows) ? prof.hydrostatics.rows
+               : (Array.isArray(prof?.hydrostatics) ? prof.hydrostatics : null);
+    return Array.isArray(rows) ? rows.slice() : null;
+  } catch { return null; }
+}
+function getDCShipParamsRaw() {
+  try {
+    const id = localStorage.getItem('dc_active_ship');
+    if (!id) return {};
+    const raw = localStorage.getItem('dc_ship_' + id);
+    if (!raw) return {};
+    const prof = JSON.parse(raw);
+    const sp = prof?.ship || {};
+    const lbp = (typeof sp.lbp === 'number') ? sp.lbp : undefined;
+    const rho_ref = (typeof sp.rho_ref === 'number') ? sp.rho_ref : (typeof sp.rho === 'number' ? sp.rho : undefined);
+    return { lbp, rho_ref };
+  } catch { return {}; }
+}
+
 // Simple state
 let tanks = buildDefaultTanks();
 let parcels = [
@@ -2519,9 +2547,13 @@ function computeHydroForAllocations(allocations) {
   }
   if (!(W > 0)) return null;
   const LCG = Mx / W;
-  const rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF>0) ? SHIP_PARAMS.RHO_REF : 1.025;
-  const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
-  const Hship = computeHydroShip(HYDRO_ROWS, W, LCG, LBP, rho_ref);
+  // Prefer Ship Data active ship hydro rows and params verbatim
+  const rowsDC = getDCHydroRowsRaw();
+  const rowsUse = (Array.isArray(rowsDC) && rowsDC.length) ? rowsDC : HYDRO_ROWS;
+  const { lbp: lbpDC, rho_ref: rhoDC } = getDCShipParamsRaw();
+  const rho_ref = (typeof rhoDC === 'number' && rhoDC>0) ? rhoDC : ((typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF>0) ? SHIP_PARAMS.RHO_REF : 1.025);
+  const LBP = (typeof lbpDC === 'number' && lbpDC>0) ? lbpDC : ((typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null);
+  const Hship = computeHydroShip(rowsUse, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP? (LBP/2)+(Hship.LCF||0):undefined), dFP: (LBP? (LBP/2)-(Hship.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
