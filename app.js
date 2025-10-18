@@ -10,6 +10,17 @@ const SHIP_PARAMS = { LBP: null, RHO_REF: null, LCG_FO_FW: null, LCG_FO: null, L
 const LIGHT_SHIP = { weight_mt: null, lcg: null };
 let HYDRO_ROWS = null; // cached hydro rows from draft_calculator
 let HYDRO_META = null; // optional meta: source, units, rowsCount
+// Optional global bias to shift all cargo/slop tank LCGs (meters, +fwd). Helps align with Ship Data if naming/long-ref drifts.
+const LS_LCG_BIAS = 'stowage_lcg_bias_v1';
+function getLCGBias() {
+  try {
+    const qs = new URLSearchParams(location.search||'');
+    if (qs.has('lcg_bias')) return Number(qs.get('lcg_bias')) || 0;
+  } catch {}
+  try { const s = localStorage.getItem(LS_LCG_BIAS); if (s!=null) return Number(s)||0; } catch {}
+  return 0;
+}
+function setLCGBias(v) { try { localStorage.setItem(LS_LCG_BIAS, String(v)); } catch {} }
 /** @type {Map<string, number>} */
 let TANK_LCG_MAP = new Map(); // map tank_id -> lcg (midship +forward)
 /** Ballast tanks metadata imported from Ship Data (if available) */
@@ -2457,10 +2468,12 @@ function computeHydroForAllocations(allocations) {
   const inputs = getReverseInputs();
   const { rho, fo, fw, oth, constW, constX } = inputs;
   let W = 0, Mx = 0;
+  const LCG_BIAS = getLCGBias();
   // cargo allocations
   allocations.forEach(a => {
     const w = a.weight_mt || 0;
-    const x = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : 0;
+    const x0 = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : 0;
+    const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS;
     W += w;
     Mx += w * (isFinite(x) ? x : 0);
   });
@@ -2505,7 +2518,8 @@ function computeHydroForAllocations(allocations) {
     Ta = Tm + trim_m * (dAP / LBP);
   }
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
-  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m };
+  // Include internals for debugging/export parity with Ship Data
+  return { W_total: W, DWT, Tf, Tm, Ta, Trim: trim_m, LCG_total: LCG, LCB, LCF: (H&&typeof H.LCF==='number')?H.LCF:undefined, MCT1cm: MCT ?? undefined, TPC: (H&&typeof H.TPC==='number')?H.TPC:undefined, dAP: (LBP? (LBP/2)+(H?.LCF||0):undefined), dFP: (LBP? (LBP/2)-(H?.LCF||0):undefined), LCG_bias: LCG_BIAS };
 }
 
 // Compute minimal symmetric ballast (P/S pairs) to meet strict trim tolerance for Optimum variant.
