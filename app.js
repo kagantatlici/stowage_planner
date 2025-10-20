@@ -1204,9 +1204,38 @@ function computeVariants() {
   const vWing = computePlanSingleWingAlternative(tanks, parcels);
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
   const altList = computePlanMinKAlternatives(tanks, parcels, 5) || [];
-  return {
+
+  function planSig(res) {
+    if (!res || !Array.isArray(res.allocations)) return '';
+    return res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`).sort().join('|');
+  }
+  function isSingleWing(res) {
+    try {
+      if (!res || !Array.isArray(res.allocations)) return false;
+      const vmap = new Map();
+      res.allocations.forEach(a => vmap.set(a.tank_id, (vmap.get(a.tank_id)||0) + (a.assigned_m3||0)));
+      const pairs = new Map(); // idx -> {P:vol,S:vol}
+      for (const [tid, vol] of vmap.entries()) {
+        const idx = cotPairIndex(tid);
+        if (idx == null) continue;
+        const side = /P$/.test(tid) ? 'P' : (/S$/.test(tid) ? 'S' : null);
+        if (!side) continue;
+        const entry = pairs.get(idx) || { P:0, S:0 };
+        entry[side] += vol;
+        pairs.set(idx, entry);
+      }
+      for (const e of pairs.values()) {
+        const p = e.P || 0, s = e.S || 0;
+        if ((p > 1e-6 && s <= 1e-6) || (s > 1e-6 && p <= 1e-6)) return true;
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  const candidates = {
     engine_min_k: { id: 'Engine — Min Tanks', res: vMin },
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
+    // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
       `engine_alt_${i+1}`,
       { id: `Engine — Min Tanks Alt ${i+1}`, res: r }
@@ -1215,6 +1244,25 @@ function computeVariants() {
     engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
     engine_max_remaining: { id: 'Engine — Max Remaining', res: vMax }
   };
+
+  // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
+  const order = [
+    'engine_min_k', 'engine_keep_slops_small',
+    'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
+    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
+  ];
+  const seen = new Set();
+  const out = {};
+  for (const k of order) {
+    const entry = candidates[k];
+    if (!entry || !entry.res || !Array.isArray(entry.res.allocations)) continue;
+    if (k === 'engine_single_wing' && !isSingleWing(entry.res)) continue; // reflect reality
+    const sig = planSig(entry.res);
+    if (!sig || seen.has(sig)) continue; // drop identical
+    seen.add(sig);
+    out[k] = entry;
+  }
+  return out;
 }
 
 function fillVariantSelect() {
