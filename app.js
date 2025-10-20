@@ -72,6 +72,7 @@ const btnCompute = document.getElementById('btn-compute');
 // Demo load buttons removed from UI
 const btnAddParcel = document.getElementById('btn-add-parcel');
 const btnAddCenter = document.getElementById('btn-add-center');
+const btnImportShip = document.getElementById('btn-import-ship');
 const activeShipEl = document.getElementById('active-ship');
 const summaryEl = document.getElementById('summary');
 const layoutGrid = document.getElementById('layout-grid');
@@ -86,6 +87,7 @@ const btnLoadCfg = document.getElementById('btn-load-cfg');
 const btnExportCfg = document.getElementById('btn-export-cfg');
 const btnDelCfg = document.getElementById('btn-del-cfg');
 const fileImportCfg = document.getElementById('file-import-cfg');
+const fileImportShip = document.getElementById('file-import-ship');
 const btnExportJson = document.getElementById('btn-export-json');
 const variantSelect = document.getElementById('plan-variant');
 const viewTabs = document.querySelectorAll('.view-tabs .tab');
@@ -265,6 +267,76 @@ async function saveConfigToFile(filename, name, currentTanks) {
     console.warn('Save to file failed:', e);
     return null;
   }
+}
+
+async function importShipFromDefault() {
+  try {
+    const res = await fetch('./ships_export_2025-10-05.json', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const json = await res.json();
+    const ok = await applyImportedShipPayload(json);
+    if (ok) alert('Imported ship from ships_export_2025-10-05.json');
+    return ok;
+  } catch (err) {
+    console.warn('Default ship import failed', err);
+    return false;
+  }
+}
+
+async function applyImportedShipPayload(payload) {
+  try {
+    const entry = pickShipEntry(payload);
+    if (!entry) return false;
+    const profile = normalizeShipProfile(entry);
+    if (!profile) return false;
+    const meta = extractShipMetaFromProfile(profile);
+    if (meta) applyShipMeta(meta);
+    const cargoArr = extractCargoArray(profile);
+    if (cargoArr && cargoArr.length) {
+      tanks = mapCargoArrayToTanks(cargoArr, { min_pct: 0.5, max_pct: 0.98 });
+    }
+    persistLastState();
+    render();
+    computeAndRender();
+    return true;
+  } catch (err) {
+    console.error('applyImportedShipPayload error', err);
+    return false;
+  }
+}
+
+function pickShipEntry(payload) {
+  if (!payload) return null;
+  if (Array.isArray(payload.ships) && payload.ships.length) return payload.ships[0];
+  if (Array.isArray(payload) && payload.length) return payload[0];
+  if (payload.ship || payload.tanks || payload.hydrostatics) return payload;
+  return null;
+}
+
+function normalizeShipProfile(entry) {
+  if (!entry) return null;
+  if (entry.ship || entry.tanks || entry.hydrostatics) return entry;
+  const ship = entry.ship ? entry.ship : {
+    name: entry.name || entry.id || 'Imported Ship',
+    lbp: entry.lbp,
+    rho_ref: entry.rho_ref ?? entry.rhoRef ?? entry.rho,
+    light_ship: entry.light_ship || entry.lightShip
+  };
+  const tanks = entry.tanks ? entry.tanks
+    : { cargo: Array.isArray(entry.cargo) ? entry.cargo : Array.isArray(entry.tanks_array) ? entry.tanks_array : [] };
+  const hydrostatics = entry.hydrostatics ? entry.hydrostatics
+    : (Array.isArray(entry.rows) ? { rows: entry.rows } : undefined);
+  return { ship, tanks, hydrostatics };
+}
+
+function extractCargoArray(profile) {
+  if (!profile) return [];
+  if (profile.tanks && Array.isArray(profile.tanks.cargo)) return profile.tanks.cargo;
+  if (profile.tanks && Array.isArray(profile.tanks.CARGO)) return profile.tanks.CARGO;
+  if (Array.isArray(profile.tanks)) return profile.tanks;
+  if (Array.isArray(profile.cargo)) return profile.cargo;
+  if (Array.isArray(profile)) return profile;
+  return [];
 }
 
 // Load only capacities (volume_m3) from ships_export_2025-10-05.json if present
@@ -1221,6 +1293,29 @@ btnAddCenter.addEventListener('click', () => {
   persistLastState();
   render();
 });
+if (btnImportShip) {
+  btnImportShip.addEventListener('click', async () => {
+    const loaded = await importShipFromDefault();
+    if (!loaded && fileImportShip) fileImportShip.click();
+  });
+}
+if (fileImportShip) {
+  fileImportShip.addEventListener('change', async () => {
+    const f = fileImportShip.files && fileImportShip.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      const json = JSON.parse(text);
+      const ok = await applyImportedShipPayload(json);
+      if (!ok) alert('Unable to parse ship data from file.');
+    } catch (err) {
+      console.error('Ship import failed', err);
+      alert('Ship import failed. See console for details.');
+    } finally {
+      fileImportShip.value = '';
+    }
+  });
+}
 
 // Initial render
 const restored = restoreLastState();
