@@ -73,6 +73,7 @@ const btnCompute = document.getElementById('btn-compute');
 const btnAddParcel = document.getElementById('btn-add-parcel');
 const btnAddCenter = document.getElementById('btn-add-center');
 const btnImportShip = document.getElementById('btn-import-ship');
+const btnClearShips = document.getElementById('btn-clear-ships');
 const activeShipEl = document.getElementById('active-ship');
 const summaryEl = document.getElementById('summary');
 const layoutGrid = document.getElementById('layout-grid');
@@ -357,6 +358,39 @@ function extractCargoArray(profile) {
   if (Array.isArray(profile.cargo)) return profile.cargo;
   if (Array.isArray(profile)) return profile;
   return [];
+}
+
+function clearImportedShips() {
+  try { localStorage.removeItem(LS_PRESETS); } catch {}
+  try { localStorage.removeItem(LS_SHIP_META); } catch {}
+  try { localStorage.removeItem(LS_LAST); } catch {}
+  try { localStorage.removeItem('dc_ships_index'); } catch {}
+  try { localStorage.removeItem('dc_active_ship'); } catch {}
+  try {
+    const toDelete = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('dc_ship_')) toDelete.push(key);
+    }
+    toDelete.forEach(k => localStorage.removeItem(k));
+  } catch {}
+  SHIP_PARAMS.LBP = null;
+  SHIP_PARAMS.RHO_REF = null;
+  SHIP_PARAMS.LCG_FO_FW = null;
+  SHIP_PARAMS.LCG_FO = null;
+  SHIP_PARAMS.LCG_FW = null;
+  SHIP_PARAMS.LCG_OTH = null;
+  LIGHT_SHIP.weight_mt = null;
+  LIGHT_SHIP.lcg = null;
+  TANK_LCG_MAP = new Map();
+  BALLAST_TANKS = [];
+  HYDRO_ROWS = null;
+  HYDRO_META = null;
+  tanks = buildDefaultTanks();
+  persistLastState();
+  refreshPresetSelect();
+  render();
+  computeAndRender();
 }
 
 // Load only capacities (volume_m3) from ships_export_2025-10-05.json if present
@@ -1334,6 +1368,18 @@ if (fileImportShip) {
       alert('Ship import failed. See console for details.');
     } finally {
       fileImportShip.value = '';
+    }
+  });
+}
+if (btnClearShips) {
+  btnClearShips.addEventListener('click', () => {
+    try {
+      if (!confirm('Clear all imported ships from local storage?')) return;
+      clearImportedShips();
+      alert('Imported ship data cleared.');
+    } catch (err) {
+      console.error('Clear ships failed', err);
+      alert('Unable to clear imported ships.');
     }
   });
 }
