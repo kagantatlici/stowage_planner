@@ -477,8 +477,8 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
 
   // Global options (user-approved)
   const bandEnabled = true;
-  const bandMinPct = (typeof policy.bandMinPctOverride === 'number') ? policy.bandMinPctOverride : 0.45; // default 45%
-  let bandSlotsLeft = (typeof policy.bandSlotsLeftOverride === 'number') ? policy.bandSlotsLeftOverride : 1;   // default: 1 tank
+  const bandMinPct = 0.45; // 45%
+  let bandSlotsLeft = 1;   // at most 1 tank across entire plan
   /** @type {Set<string>} */
   const bandUsedTankIds = new Set();
   const bufferEnabled = true;

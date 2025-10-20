@@ -105,6 +105,7 @@ const rsMaxCargoEl = document.getElementById('rs-max-cargo');
 
 // Track last computed ballast total weight for Max Cargo view
 let LAST_BALLAST_W_MT = 0;
+let LAST_MAX_CARGO_MT = null;
 
 // Restore persisted UI inputs (reverse-solver + config name) before any render
 restoreReverseInputs();
@@ -207,10 +208,67 @@ function restoreCfgName() {
   try { const v = localStorage.getItem(LS_CFG_NAME); if (cfgNameInput && v != null) cfgNameInput.value = v; } catch {}
 }
 
+function stripAutoMaxCargoFlag(parcel) {
+  if (!parcel || !parcel.autoMaxCargo) return parcel;
+  const { autoMaxCargo, ...rest } = parcel;
+  return rest;
+}
+
+function tryApplyMaxCargoToParcel(parcel) {
+  if (!parcel) return { parcel, applied: false };
+  const targetDraftEntered = rsTargetDraftEl && String(rsTargetDraftEl.value || '').trim() !== '';
+  if (!targetDraftEntered) return { parcel, applied: false };
+  if (!Number.isFinite(LAST_MAX_CARGO_MT) || LAST_MAX_CARGO_MT <= 0) return { parcel, applied: false };
+  const dens = Number(parcel.density_kg_m3 || 0);
+  if (!Number.isFinite(dens) || dens <= 0) return { parcel, applied: false };
+  const volume = (LAST_MAX_CARGO_MT * 1000) / dens;
+  if (!Number.isFinite(volume) || volume <= 0) return { parcel, applied: false };
+  const hasAutoFlag = !!parcel.autoMaxCargo;
+  const currentVol = parcel.total_m3 ?? NaN;
+  const needsUpdate = !Number.isFinite(currentVol) || Math.abs(currentVol - volume) > 1e-6;
+  if (!needsUpdate && hasAutoFlag) {
+    return { parcel, applied: true };
+  }
+  return { parcel: { ...parcel, total_m3: volume, autoMaxCargo: true }, applied: true };
+}
+
+function syncAutoMaxCargoParcels(options = {}) {
+  const { skipRender = false } = options || {};
+  if (!Array.isArray(parcels) || parcels.length === 0) return;
+  const targetDraftEntered = rsTargetDraftEl && String(rsTargetDraftEl.value || '').trim() !== '';
+  let mutated = false;
+  const nextParcels = parcels.map(parcel => {
+    if (!parcel || !parcel.autoMaxCargo) return parcel;
+    if (!parcel.fill_remaining) {
+      mutated = true;
+      return stripAutoMaxCargoFlag(parcel);
+    }
+    if (!targetDraftEntered || !Number.isFinite(LAST_MAX_CARGO_MT) || LAST_MAX_CARGO_MT <= 0) {
+      return parcel;
+    }
+    const dens = Number(parcel.density_kg_m3 || 0);
+    if (!Number.isFinite(dens) || dens <= 0) return parcel;
+    const volume = (LAST_MAX_CARGO_MT * 1000) / dens;
+    if (!Number.isFinite(volume) || volume <= 0) return parcel;
+    const currentVol = parcel.total_m3 ?? NaN;
+    if (Number.isFinite(currentVol) && Math.abs(currentVol - volume) <= 1e-6) {
+      return parcel;
+    }
+    mutated = true;
+    return { ...parcel, total_m3: volume, autoMaxCargo: true };
+  });
+  if (mutated) {
+    parcels = nextParcels;
+    persistLastState();
+    if (!skipRender) render();
+  }
+}
+
 // Compute and show Max Cargo for the target draft using hydro table
 async function updateMaxCargoView() {
   try {
     if (!rsMaxCargoEl) return;
+    LAST_MAX_CARGO_MT = null;
     // Parse inputs (support comma decimals)
     const parseNum = (el, fb = NaN) => {
       if (!el) return fb;
@@ -246,9 +304,12 @@ async function updateMaxCargoView() {
     const ballast = Number.isFinite(LAST_BALLAST_W_MT) ? LAST_BALLAST_W_MT : 0;
     const others = fo + fw + oth + constW + light + ballast;
     const cargoMax = Math.max(0, W_dis - others);
+    LAST_MAX_CARGO_MT = cargoMax;
     const txt = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
     rsMaxCargoEl.textContent = txt;
+    syncAutoMaxCargoParcels();
   } catch {
+    LAST_MAX_CARGO_MT = null;
     if (rsMaxCargoEl) rsMaxCargoEl.textContent = 'Max cargo: — mt';
   }
 }
@@ -752,7 +813,8 @@ function renderParcelEditor() {
         const dens = Number(parcels[idx].density_kg_m3 || 0);
         if (isFinite(w) && isFinite(dens) && dens > 0) {
           const vol = (w * 1000) / dens; // m3
-          parcels[idx] = { ...parcels[idx], total_m3: vol };
+          const base = stripAutoMaxCargoFlag(parcels[idx]);
+          parcels[idx] = { ...base, total_m3: vol };
           persistLastState();
           render();
           return;
@@ -774,11 +836,29 @@ function renderParcelEditor() {
       // Ensure only last parcel can be fill_remaining
       if (field === 'fill_remaining' && val === true && idx !== parcels.length - 1) return;
       const mappedField = field === 'density_g_cm3' ? 'density_kg_m3' : field;
-      parcels[idx] = { ...parcels[idx], [mappedField]: val };
-      // If fill_remaining is toggled true, clear total_m3
+      let nextParcel = { ...parcels[idx] };
+      nextParcel[mappedField] = val;
       if (field === 'fill_remaining') {
-        if (val) parcels[idx].total_m3 = undefined;
+        if (val) {
+          const result = tryApplyMaxCargoToParcel(nextParcel);
+          if (result.applied) {
+            nextParcel = result.parcel;
+          } else {
+            nextParcel.total_m3 = undefined;
+            nextParcel = stripAutoMaxCargoFlag(nextParcel);
+          }
+        } else {
+          nextParcel = stripAutoMaxCargoFlag(nextParcel);
+        }
+      } else if (mappedField === 'total_m3') {
+        nextParcel = stripAutoMaxCargoFlag(nextParcel);
+      } else if (mappedField === 'density_kg_m3' && nextParcel.fill_remaining && nextParcel.autoMaxCargo) {
+        const result = tryApplyMaxCargoToParcel(nextParcel);
+        if (result.applied) {
+          nextParcel = result.parcel;
+        }
       }
+      parcels[idx] = nextParcel;
       persistLastState();
       render();
     });
