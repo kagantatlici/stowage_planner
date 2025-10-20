@@ -44,6 +44,15 @@ const btnAddParcel = document.getElementById('btn-add-parcel');
 const btnAddCenter = document.getElementById('btn-add-center');
 const btnImportShip = document.getElementById('btn-import-ship');
 const btnClearShips = document.getElementById('btn-clear-ships');
+// Reverse-solver inputs in Cargo view
+const rsTargetDraftEl = document.getElementById('rs_target_draft');
+const rsRhoEl = document.getElementById('rs_rho');
+const rsFoEl = document.getElementById('rs_fo_mt');
+const rsFwEl = document.getElementById('rs_fw_mt');
+const rsOthEl = document.getElementById('rs_oth_mt');
+const rsConstEl = document.getElementById('rs_const_mt');
+const rsConstLcgEl = document.getElementById('rs_const_lcg');
+const rsMaxCargoEl = document.getElementById('rs-max-cargo');
 const activeShipEl = document.getElementById('active-ship');
 const summaryEl = document.getElementById('summary');
 const layoutGrid = document.getElementById('layout-grid');
@@ -688,7 +697,16 @@ function renderParcelEditor() {
       const mappedField = field === 'density_g_cm3' ? 'density_kg_m3' : field;
       let nextParcel = { ...parcels[idx] };
       nextParcel[mappedField] = val;
-      if (field === 'fill_remaining' && val) nextParcel.total_m3 = undefined;
+      if (field === 'fill_remaining' && val) {
+        // If Max Cargo is available and density is known, transfer to volume
+        const dens = Number((parcels[idx] && parcels[idx].density_kg_m3) || 0);
+        if (Number.isFinite(LAST_MAX_CARGO_MT) && LAST_MAX_CARGO_MT > 0 && Number.isFinite(dens) && dens > 0) {
+          const vol = (LAST_MAX_CARGO_MT * 1000) / dens;
+          nextParcel.total_m3 = vol;
+        } else {
+          nextParcel.total_m3 = undefined;
+        }
+      }
       parcels[idx] = nextParcel;
       persistLastState();
       render();
@@ -1716,6 +1734,59 @@ window.stowage = {
 
 // expose engine variants
 window.stowageEngine = { computePlanMaxRemaining, computePlanMinTanksAggressive };
+
+// ---- Max Cargo (from target draft) ----
+let LAST_MAX_CARGO_MT = null;
+
+function getRSInputs() {
+  const parseNum = (el, fb = NaN) => {
+    if (!el) return fb;
+    const v = String(el.value || '').replace(',', '.');
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : fb;
+  };
+  return {
+    T: parseNum(rsTargetDraftEl, NaN),
+    rho: parseNum(rsRhoEl, (typeof SHIP_PARAMS.RHO_REF === 'number' ? SHIP_PARAMS.RHO_REF : 1.025)),
+    fo: parseNum(rsFoEl, 0),
+    fw: parseNum(rsFwEl, 0),
+    oth: parseNum(rsOthEl, 0),
+    constW: parseNum(rsConstEl, 0),
+    constX: parseNum(rsConstLcgEl, 0)
+  };
+}
+
+function updateMaxCargoView() {
+  try {
+    LAST_MAX_CARGO_MT = null;
+    if (!rsMaxCargoEl) return;
+    const { T, rho, fo, fw, oth, constW } = getRSInputs();
+    if (!Array.isArray(HYDRO_ROWS) || HYDRO_ROWS.length === 0 || !Number.isFinite(T)) {
+      rsMaxCargoEl.textContent = 'Max cargo: — mt';
+      return;
+    }
+    const H = interpHydro(HYDRO_ROWS, T);
+    const DIS_FW = H && Number.isFinite(H.DIS_FW) ? Number(H.DIS_FW) : NaN;
+    if (!Number.isFinite(DIS_FW)) { rsMaxCargoEl.textContent = 'Max cargo: — mt'; return; }
+    const W_dis = rho * DIS_FW;
+    const light = (Number.isFinite(LIGHT_SHIP.weight_mt) ? Number(LIGHT_SHIP.weight_mt) : 0);
+    const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0);
+    const cargoMax = Math.max(0, W_dis - others);
+    LAST_MAX_CARGO_MT = cargoMax;
+    rsMaxCargoEl.textContent = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
+  } catch {
+    LAST_MAX_CARGO_MT = null;
+    if (rsMaxCargoEl) rsMaxCargoEl.textContent = 'Max cargo: — mt';
+  }
+}
+
+// Wire inputs to live-update Max Cargo
+try {
+  [rsTargetDraftEl, rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
+    .filter(Boolean)
+    .forEach(el => el.addEventListener('input', updateMaxCargoView));
+} catch {}
+try { updateMaxCargoView(); } catch {}
 
 function interpHydro(rows, T) {
   try {
