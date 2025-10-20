@@ -1168,6 +1168,7 @@ function renderSummaryAndSvg(result) {
 let currentPlanResult = null;
 
 async function computeAndRender() {
+  try { syncActiveShipMeta(); } catch {}
   try { await ensureHydroLoaded(); } catch {}
   try { await ensureLCGMapLoaded(); } catch {}
   ensureUniqueParcelIDs();
@@ -1441,8 +1442,6 @@ function loadDCShip(id) {
   } catch {
     return false;
   }
-  // Update Max Cargo hint after rendering (ballast weight may have changed)
-  try { updateMaxCargoView(); } catch {}
 }
 // Apply only ship metadata (LBP, hydro rows, LCGs) from currently active DC ship without altering tanks
 function applyActiveShipMetaOnly() {
@@ -1472,6 +1471,15 @@ window.addEventListener('storage', (e) => {
 });
 window.addEventListener('focus', () => { try { refreshPresetSelect(); } catch {} });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { try { refreshPresetSelect(); } catch {} } });
+
+function syncActiveShipMeta() {
+  let applied = false;
+  try { applied = applyActiveShipMetaOnly(); } catch {}
+  if (!applied && (!HYDRO_ROWS || HYDRO_ROWS.length === 0)) {
+    try { ensureHydroLoaded(); } catch {}
+  }
+}
+
 // Load now imports JSON via file chooser and updates only capacities
 btnLoadCfg.addEventListener('click', () => {
   if (fileImportCfg) fileImportCfg.click();
