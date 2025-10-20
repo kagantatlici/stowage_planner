@@ -72,3 +72,6 @@ nyc_output/
 # Project-specific (local working copies)
 /repo_draft_calculator/
 /repo_stowage_planner/
+/repo_sp/
+/repo_vscx/
+/stowage_planner/
