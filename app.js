@@ -31,39 +31,9 @@ let BALLAST_TANKS = [];
 const TOL_TRIM_M = 0.02;   // m
 const TOL_PS_PCT = 0.2;    // percent
 
-// ---- Ship Data (Draft Calculator) raw access helpers ----
-function getDCHydroRowsRaw() {
-  try {
-    const id = localStorage.getItem('dc_active_ship');
-    if (!id) return null;
-    const raw = localStorage.getItem('dc_ship_' + id);
-    if (!raw) return null;
-    const prof = JSON.parse(raw);
-    // Accept both shapes: {hydrostatics:{rows:[]}} or {hydrostatics:[]}
-    const rows = Array.isArray(prof?.hydrostatics?.rows) ? prof.hydrostatics.rows
-               : (Array.isArray(prof?.hydrostatics) ? prof.hydrostatics : null);
-    return Array.isArray(rows) ? rows.slice() : null;
-  } catch { return null; }
-}
-function getDCShipParamsRaw() {
-  try {
-    const id = localStorage.getItem('dc_active_ship');
-    if (!id) return {};
-    const raw = localStorage.getItem('dc_ship_' + id);
-    if (!raw) return {};
-    const prof = JSON.parse(raw);
-    const sp = prof?.ship || {};
-    const lbp = (typeof sp.lbp === 'number') ? sp.lbp : undefined;
-    const rho_ref = (typeof sp.rho_ref === 'number') ? sp.rho_ref : (typeof sp.rho === 'number' ? sp.rho : undefined);
-    return { lbp, rho_ref };
-  } catch { return {}; }
-}
-
 // Simple state
-let tanks = buildDefaultTanks();
-let parcels = [
-  { id: 'P1', name: 'naphtha', total_m3: 41000.000, density_kg_m3: 710, temperature_c: 15, color: '#ef4444' }
-];
+let tanks = [];
+let parcels = [];
 
 // UI helpers
 const tankEditorEl = document.getElementById('tank-editor');
@@ -175,33 +145,12 @@ function saveShipMeta(m) {
   localStorage.setItem(LS_SHIP_META, JSON.stringify(m || {}));
 }
 function refreshPresetSelect() {
-  const seenLabels = new Set();
   const options = [];
-  // Draft Calculator ships (Hydrostatic)
-  try {
-    const dcIdxRaw = localStorage.getItem('dc_ships_index');
-    const dcIdx = dcIdxRaw ? JSON.parse(dcIdxRaw) : [];
-    if (Array.isArray(dcIdx) && dcIdx.length > 0) {
-      dcIdx.forEach(entry => {
-        if (!entry || !entry.id) return;
-        const base = entry.name || entry.id;
-        const label = `${base} (Hydrostatic)`;
-        if (seenLabels.has(label)) return;
-        seenLabels.add(label);
-        options.push({ value: `dc:${entry.id}`, label });
-      });
-    }
-  } catch {}
-  // Local presets (tanks-only)
   try {
     const presets = loadPresets();
     const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
     names.forEach(n => {
-      const label = n;
-      if (!seenLabels.has(label)) {
-        seenLabels.add(label);
-        options.push({ value: `preset:${n}`, label });
-      }
+      options.push({ value: `preset:${n}`, label: n });
     });
   } catch {}
   cfgSelect.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
@@ -209,17 +158,6 @@ function refreshPresetSelect() {
 
 function applySelectionValue(value) {
   if (!value) return false;
-  if (value.startsWith('dc:')) {
-    const id = value.slice(3);
-    if (!id) return false;
-    if (loadDCShip(id)) {
-      try { cfgNameInput.value = getDCShipName(id) || id; } catch {}
-      persistLastState();
-      render();
-      return true;
-    }
-    return false;
-  }
   if (value.startsWith('preset:')) {
     const name = value.slice(7);
     const presets = loadPresets();
@@ -267,20 +205,6 @@ async function saveConfigToFile(filename, name, currentTanks) {
   } catch (e) {
     console.warn('Save to file failed:', e);
     return null;
-  }
-}
-
-async function importShipFromDefault() {
-  try {
-    const res = await fetch('./ships_export_2025-10-05.json', { cache: 'no-store' });
-    if (!res.ok) return false;
-    const json = await res.json();
-    const { count } = await importShipsFromPayload(json);
-    if (count > 0) alert(`${count} ship(s) imported from ships_export_2025-10-05.json`);
-    return count > 0;
-  } catch (err) {
-    console.warn('Default ship import failed', err);
-    return false;
   }
 }
 
@@ -364,16 +288,6 @@ function clearImportedShips() {
   try { localStorage.removeItem(LS_PRESETS); } catch {}
   try { localStorage.removeItem(LS_SHIP_META); } catch {}
   try { localStorage.removeItem(LS_LAST); } catch {}
-  try { localStorage.removeItem('dc_ships_index'); } catch {}
-  try { localStorage.removeItem('dc_active_ship'); } catch {}
-  try {
-    const toDelete = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('dc_ship_')) toDelete.push(key);
-    }
-    toDelete.forEach(k => localStorage.removeItem(k));
-  } catch {}
   SHIP_PARAMS.LBP = null;
   SHIP_PARAMS.RHO_REF = null;
   SHIP_PARAMS.LCG_FO_FW = null;
@@ -386,48 +300,14 @@ function clearImportedShips() {
   BALLAST_TANKS = [];
   HYDRO_ROWS = null;
   HYDRO_META = null;
-  tanks = buildDefaultTanks();
+  tanks = [];
+  parcels = [];
   persistLastState();
   refreshPresetSelect();
+  if (cfgSelect) cfgSelect.value = '';
+  if (cfgNameInput) cfgNameInput.value = '';
   render();
   computeAndRender();
-}
-
-// Load only capacities (volume_m3) from ships_export_2025-10-05.json if present
-async function tryLoadCapacitiesFromExport() {
-  try {
-    const res = await fetch('/ships_export_2025-10-05.json', { cache: 'no-store' });
-    if (!res.ok) return false;
-    const json = await res.json();
-    /** Build a map id -> volume_m3 from flexible shapes */
-    const volumeMap = new Map();
-    const consumeTankArr = (arr) => {
-      if (!Array.isArray(arr)) return;
-      arr.forEach(item => {
-        if (!item) return;
-        const id = item.id || item.tank_id;
-        const vol = (typeof item.volume_m3 === 'number') ? item.volume_m3
-          : (typeof item.capacity_m3 === 'number') ? item.capacity_m3
-          : (typeof item.volume === 'number') ? item.volume
-          : undefined;
-        if (id && typeof vol === 'number') volumeMap.set(id, vol);
-      });
-    };
-    if (Array.isArray(json)) consumeTankArr(json);
-    else if (json && Array.isArray(json.tanks)) consumeTankArr(json.tanks);
-    else if (json && Array.isArray(json.ships) && json.ships[0] && Array.isArray(json.ships[0].tanks)) consumeTankArr(json.ships[0].tanks);
-
-    if (volumeMap.size === 0) return false;
-    // Update only volumes, preserve other fields
-    tanks = tanks.map(t => volumeMap.has(t.id) ? { ...t, volume_m3: volumeMap.get(t.id) } : t);
-    persistLastState();
-    render();
-    try { alert('Capacities loaded from ships_export_2025-10-05.json'); } catch {}
-    return true;
-  } catch (e) {
-    console.warn('Capacity import failed:', e);
-    return false;
-  }
 }
 
 // Build volume map from flexible JSON shapes
@@ -903,31 +783,33 @@ function renderSummaryAndSvg(result) {
   }
 
   // Hydro summary (optional): compute F/M/A drafts, trim, displacement, DWT if hydro rows & LCG map available
-  (async () => {
-    try {
-      const hbox = hydroSummaryEl;
-      if (!hbox) return;
-      if (!HYDRO_ROWS) await ensureHydroLoaded();
-      if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) { hbox.style.display = 'none'; return; }
-      const allAllocs = allocations.concat(ballastAllocs || []);
-      const metrics = computeHydroForAllocations(allAllocs);
-      if (!metrics) { hbox.style.display = 'none'; return; }
-      const { W_total, DWT, Tf, Tm, Ta, Trim } = metrics;
-      hbox.style.display = 'block';
-      hbox.innerHTML = `
-        <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap:8px; font-size:13px;">
-          <div><div class="muted">Displacement (t)</div><div><b>${isFinite(W_total)?W_total.toFixed(1):'-'}</b></div></div>
-          <div><div class="muted">DWT (t)</div><div><b>${isFinite(DWT)?DWT.toFixed(1):'-'}</b></div></div>
-          <div><div class="muted">Draft Fwd (m)</div><div><b>${Tf.toFixed(3)}</b></div></div>
-          <div><div class="muted">Draft Mean (m)</div><div><b>${Tm.toFixed(3)}</b></div></div>
-          <div><div class="muted">Draft Aft (m)</div><div><b>${Ta.toFixed(3)}</b></div></div>
-          <div><div class="muted">Trim (m, +stern)</div><div><b>${Trim.toFixed(3)}</b></div></div>
-        </div>
-      `;
-    } catch(_) {
-      // ignore
+  try {
+    const hbox = hydroSummaryEl;
+    if (hbox) {
+      if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) {
+        hbox.style.display = 'none';
+      } else {
+        const allAllocs = allocations.concat(ballastAllocs || []);
+        const metrics = computeHydroForAllocations(allAllocs);
+        if (!metrics) {
+          hbox.style.display = 'none';
+        } else {
+          const { W_total, DWT, Tf, Tm, Ta, Trim } = metrics;
+          hbox.style.display = 'block';
+          hbox.innerHTML = `
+            <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap:8px; font-size:13px;">
+              <div><div class="muted">Displacement (t)</div><div><b>${isFinite(W_total)?W_total.toFixed(1):'-'}</b></div></div>
+              <div><div class="muted">DWT (t)</div><div><b>${isFinite(DWT)?DWT.toFixed(1):'-'}</b></div></div>
+              <div><div class="muted">Draft Fwd (m)</div><div><b>${Tf.toFixed(3)}</b></div></div>
+              <div><div class="muted">Draft Mean (m)</div><div><b>${Tm.toFixed(3)}</b></div></div>
+              <div><div class="muted">Draft Aft (m)</div><div><b>${Ta.toFixed(3)}</b></div></div>
+              <div><div class="muted">Trim (m, +stern)</div><div><b>${Trim.toFixed(3)}</b></div></div>
+            </div>
+          `;
+        }
+      }
     }
-  })();
+  } catch(_) {}
 
   // Larger, card-like ship layout (HTML/CSS)
   // Respect the order in the tank editor (array order), and place SLOP tanks at the bottom.
@@ -1293,10 +1175,7 @@ function renderSummaryAndSvg(result) {
 
 let currentPlanResult = null;
 
-async function computeAndRender() {
-  try { syncActiveShipMeta(); } catch {}
-  try { await ensureHydroLoaded(); } catch {}
-  try { await ensureLCGMapLoaded(); } catch {}
+function computeAndRender() {
   ensureUniqueParcelIDs();
   const res = computePlan(tanks, parcels);
   currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
@@ -1348,9 +1227,8 @@ btnAddCenter.addEventListener('click', () => {
   render();
 });
 if (btnImportShip) {
-  btnImportShip.addEventListener('click', async () => {
-    const loaded = await importShipFromDefault();
-    if (!loaded && fileImportShip) fileImportShip.click();
+  btnImportShip.addEventListener('click', () => {
+    if (fileImportShip) fileImportShip.click();
   });
 }
 if (fileImportShip) {
@@ -1404,17 +1282,7 @@ function autoLoadFirstPresetIfExists() {
 }
 
 if (!restored) {
-  // Try DC active ship first
-  let loaded = false;
-  try {
-    const active = localStorage.getItem('dc_active_ship');
-    if (active) {
-      // Apply only metadata to preserve user's current tanks
-      const metaApplied = applyActiveShipMetaOnly();
-      if (metaApplied) loaded = true;
-    }
-  } catch {}
-  if (!loaded) autoLoadFirstPresetIfExists();
+  autoLoadFirstPresetIfExists();
 }
 
 // If dropdown already has a selection, apply it as active ship on load
@@ -1537,14 +1405,6 @@ if (btnTransferShipData) {
 btnSaveCfg.addEventListener('click', () => {
   let name = (cfgNameInput.value || '').trim();
   if (!name) { alert('Enter a config name'); return; }
-  // Prevent collision with Hydrostatic (dc) ships by suffixing
-  try {
-    const dcIdxRaw = localStorage.getItem('dc_ships_index');
-    const dcIdx = dcIdxRaw ? JSON.parse(dcIdxRaw) : [];
-    if (Array.isArray(dcIdx) && dcIdx.some(e => (e?.name || e?.id) === name)) {
-      name = `${name} (Local)`;
-    }
-  } catch {}
   const presets = loadPresets();
   if (presets[name] && !confirm('Overwrite existing config?')) return;
   // Only save tanks (exclude ephemeral fields)
@@ -1577,69 +1437,6 @@ if (cfgSelect) {
     if (!value) return;
     applySelectionValue(value);
   });
-}
-
-function getDCShipName(id) {
-  try {
-    const idxRaw = localStorage.getItem('dc_ships_index');
-    const idx = idxRaw ? JSON.parse(idxRaw) : [];
-    const e = Array.isArray(idx) ? idx.find(x => x && x.id === id) : null;
-    return e ? (e.name || id) : id;
-  } catch { return id; }
-}
-
-function loadDCShip(id) {
-  try {
-    const raw = localStorage.getItem('dc_ship_' + id);
-    if (!raw) return false;
-    const prof = JSON.parse(raw);
-    // Extract meta and apply
-    const meta = extractShipMetaFromProfile(prof);
-    if (meta) applyShipMeta(meta);
-    // Build tanks from cargo list
-    const cargoArr = (prof && prof.tanks && Array.isArray(prof.tanks.cargo)) ? prof.tanks.cargo : [];
-    const arr = mapCargoArrayToTanks(cargoArr, { min_pct: 0.5, max_pct: 0.98 });
-    if (arr && arr.length) tanks = arr.map(t => ({ ...t }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-// Apply only ship metadata (LBP, hydro rows, LCGs) from currently active DC ship without altering tanks
-function applyActiveShipMetaOnly() {
-  try {
-    const id = localStorage.getItem('dc_active_ship');
-    if (!id) return false;
-    const raw = localStorage.getItem('dc_ship_' + id);
-    if (!raw) return false;
-    const prof = JSON.parse(raw);
-    const meta = extractShipMetaFromProfile(prof);
-    if (meta) { applyShipMeta(meta); return true; }
-  } catch {}
-  return false;
-}
-// Keep dropdown in sync when Ship Data (draft_calculator) updates localStorage
-window.addEventListener('storage', (e) => {
-  try {
-    if (!e || typeof e.key !== 'string') return;
-    if (e.key === 'dc_ships_index' || e.key.startsWith('dc_ship_')) {
-      refreshPresetSelect();
-    }
-    if (e.key === 'dc_active_ship') {
-      const applied = applyActiveShipMetaOnly();
-      if (applied) { computeAndRender(); renderActiveShipInfo(); }
-    }
-  } catch {}
-});
-window.addEventListener('focus', () => { try { refreshPresetSelect(); } catch {} });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { try { refreshPresetSelect(); } catch {} } });
-
-function syncActiveShipMeta() {
-  let applied = false;
-  try { applied = applyActiveShipMetaOnly(); } catch {}
-  if (!applied && (!HYDRO_ROWS || HYDRO_ROWS.length === 0)) {
-    try { ensureHydroLoaded(); } catch {}
-  }
 }
 
 // Load now imports JSON via file chooser and updates only capacities
@@ -1920,58 +1717,6 @@ window.stowage = {
 // expose engine variants
 window.stowageEngine = { computePlanMaxRemaining, computePlanMinTanksAggressive };
 
-// ---------------- Hydro data helpers ----------------
-async function ensureHydroLoaded() {
-  if (HYDRO_ROWS && HYDRO_ROWS.length) return HYDRO_ROWS;
-  try {
-    const res = await fetch('./data/hydrostatics.json', { cache: 'no-store' });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const rows = Array.isArray(json.rows) ? json.rows : [];
-    try { HYDRO_META = { source: json.source || null, units: json.units || null, rowsCount: rows.length }; } catch {}
-    HYDRO_ROWS = rows.sort((a,b)=>a.draft_m - b.draft_m);
-    return HYDRO_ROWS;
-  } catch { return null; }
-}
-
-async function ensureLCGMapLoaded() {
-  // Always try to augment from file so BALLAST_TANKS can be populated even if LCGs already exist
-  const map = (TANK_LCG_MAP && TANK_LCG_MAP.size) ? new Map(TANK_LCG_MAP) : new Map();
-  const ballastFromFile = [];
-  try {
-    const res = await fetch('./data/tanks.json', { cache: 'no-store' });
-    if (res.ok) {
-      const json = await res.json();
-      const arr = Array.isArray(json.tanks) ? json.tanks : [];
-      arr.forEach(t => {
-        if (!t || typeof t.lcg !== 'number') return;
-        const norm = normalizeCargoNameToId(t.name || t.id || '');
-        if (norm && /^COT\d+(P|S|C)$/.test(norm.id)) {
-          map.set(norm.id, Number(t.lcg));
-        } else if (/SLOP/i.test(String(t.name||''))) {
-          const side = /(\(|\s)(P|S)(\)|\b)/.exec(String(t.name||'').toUpperCase());
-          if (side && side[2]==='P') map.set('SLOPP', Number(t.lcg));
-          if (side && side[2]==='S') map.set('SLOPS', Number(t.lcg));
-        }
-        if (String(t.type||'').toLowerCase() === 'ballast') {
-          const id = t.id || t.name;
-          if (id) {
-            ballastFromFile.push({ id, name: t.name || id, cap_m3: (typeof t.cap_m3 === 'number' ? t.cap_m3 : 0), lcg: Number(t.lcg)||0 });
-            map.set(id, Number(t.lcg));
-          }
-        }
-      });
-    }
-  } catch {}
-  TANK_LCG_MAP = map;
-  try {
-    if ((!Array.isArray(BALLAST_TANKS) || BALLAST_TANKS.length === 0) && ballastFromFile.length > 0) {
-      BALLAST_TANKS = ballastFromFile;
-    }
-  } catch {}
-  return TANK_LCG_MAP;
-}
-
 function interpHydro(rows, T) {
   try {
     if (!rows || rows.length === 0 || !isFinite(T)) return null;
@@ -2014,7 +1759,7 @@ function solveDraftByDisFW(rows, target_dis_fw) {
 }
 
 function computeHydroForAllocations(allocations) {
-  if (!HYDRO_ROWS || !allocations) return null;
+  if (!HYDRO_ROWS || HYDRO_ROWS.length === 0 || !allocations) return null;
   // Safe linear interpolation against hydro table (guards against any external mutation)
   function interpHydroSafe(rows, T) {
     try {
@@ -2075,12 +1820,9 @@ function computeHydroForAllocations(allocations) {
   }
   if (!(W > 0)) return null;
   const LCG = Mx / W;
-  // Prefer Ship Data active ship hydro rows and params verbatim
-  const rowsDC = getDCHydroRowsRaw();
-  const rowsUse = (Array.isArray(rowsDC) && rowsDC.length) ? rowsDC : HYDRO_ROWS;
-  const { lbp: lbpDC, rho_ref: rhoDC } = getDCShipParamsRaw();
-  const rho_ref = (typeof rhoDC === 'number' && rhoDC>0) ? rhoDC : ((typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF>0) ? SHIP_PARAMS.RHO_REF : 1.025);
-  const LBP = (typeof lbpDC === 'number' && lbpDC>0) ? lbpDC : ((typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null);
+  const rowsUse = HYDRO_ROWS;
+  const rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
+  const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
   const Hship = computeHydroShip(rowsUse, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
