@@ -73,9 +73,10 @@ const variantSelect = document.getElementById('plan-variant');
 const viewTabs = document.querySelectorAll('.view-tabs .tab');
 const btnTransferShipData = document.getElementById('btn-transfer-shipdata');
 const btnSolveDraft = document.getElementById('btn-solve-draft');
+// Variant dropdown will be enabled once variants are computed
 if (variantSelect) {
-  variantSelect.innerHTML = '<option>Single Plan</option>';
-  variantSelect.disabled = true;
+  variantSelect.innerHTML = '<option>Computing…</option>';
+  variantSelect.disabled = false;
 }
 if (btnSolveDraft) {
   btnSolveDraft.style.display = 'none';
@@ -1192,10 +1193,48 @@ function renderSummaryAndSvg(result) {
 }
 
 let currentPlanResult = null;
+let variantsCache = null;
+let selectedVariantKey = 'engine_min_k';
+
+function computeVariants() {
+  ensureUniqueParcelIDs();
+  const vMin = computePlan(tanks, parcels);
+  const vMax = computePlanMaxRemaining(tanks, parcels);
+  const vAgg = computePlanMinTanksAggressive(tanks, parcels);
+  const vWing = computePlanSingleWingAlternative(tanks, parcels);
+  const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
+  const altList = computePlanMinKAlternatives(tanks, parcels, 5) || [];
+  return {
+    engine_min_k: { id: 'Engine — Min Tanks', res: vMin },
+    engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
+    ...Object.fromEntries(altList.map((r, i) => [
+      `engine_alt_${i+1}`,
+      { id: `Engine — Min Tanks Alt ${i+1}`, res: r }
+    ])),
+    engine_single_wing: { id: 'Engine — Single-Wing (Ballast)', res: vWing },
+    engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
+    engine_max_remaining: { id: 'Engine — Max Remaining', res: vMax }
+  };
+}
+
+function fillVariantSelect() {
+  if (!variantSelect || !variantsCache) return;
+  const order = [
+    'engine_min_k', 'engine_keep_slops_small',
+    'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
+    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
+  ];
+  const opts = order.filter(k => variantsCache[k])
+    .map(k => ({ key: k, label: variantsCache[k].id }));
+  if (!opts.find(o => o.key === selectedVariantKey)) selectedVariantKey = opts[0]?.key || 'engine_min_k';
+  variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key===selectedVariantKey?'selected':''}>${o.label}</option>`).join('');
+}
 
 function computeAndRender() {
-  ensureUniqueParcelIDs();
-  const res = computePlan(tanks, parcels);
+  variantsCache = computeVariants();
+  fillVariantSelect();
+  const chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'];
+  const res = chosen?.res || computePlan(tanks, parcels);
   currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
   persistLastState();
   renderSummaryAndSvg(currentPlanResult);
@@ -1225,6 +1264,15 @@ function render() {
 }
 
 btnCompute.addEventListener('click', computeAndRender);
+if (variantSelect) {
+  variantSelect.addEventListener('change', () => {
+    selectedVariantKey = variantSelect.value;
+    const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['engine_min_k']);
+    const res = chosen?.res || computePlan(tanks, parcels);
+    currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+    renderSummaryAndSvg(currentPlanResult);
+  });
+}
 // Demo handlers removed
 btnAddParcel.addEventListener('click', () => {
   // Ensure only the last parcel can be fill_remaining
