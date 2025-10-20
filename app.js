@@ -274,43 +274,63 @@ async function importShipFromDefault() {
     const res = await fetch('./ships_export_2025-10-05.json', { cache: 'no-store' });
     if (!res.ok) return false;
     const json = await res.json();
-    const ok = await applyImportedShipPayload(json);
-    if (ok) alert('Imported ship from ships_export_2025-10-05.json');
-    return ok;
+    const { count } = await importShipsFromPayload(json);
+    if (count > 0) alert(`${count} ship(s) imported from ships_export_2025-10-05.json`);
+    return count > 0;
   } catch (err) {
     console.warn('Default ship import failed', err);
     return false;
   }
 }
 
-async function applyImportedShipPayload(payload) {
-  try {
-    const entry = pickShipEntry(payload);
-    if (!entry) return false;
+async function importShipsFromPayload(payload) {
+  const entries = collectShipEntries(payload);
+  if (!entries.length) return { count: 0 };
+  let presets = loadPresets();
+  let metaStore = loadShipMeta();
+  const existingNames = new Set(Object.keys(presets || {}));
+  if (metaStore) Object.keys(metaStore).forEach(n => existingNames.add(n));
+  if (!Array.isArray(presets) && typeof presets !== 'object') presets = {};
+  if (!metaStore || typeof metaStore !== 'object') metaStore = {};
+  const importedNames = [];
+  for (const entry of entries) {
     const profile = normalizeShipProfile(entry);
-    if (!profile) return false;
-    const meta = extractShipMetaFromProfile(profile);
-    if (meta) applyShipMeta(meta);
+    if (!profile) continue;
     const cargoArr = extractCargoArray(profile);
-    if (cargoArr && cargoArr.length) {
-      tanks = mapCargoArrayToTanks(cargoArr, { min_pct: 0.5, max_pct: 0.98 });
+    if (!Array.isArray(cargoArr) || cargoArr.length === 0) continue;
+    const tankList = mapCargoArrayToTanks(cargoArr, { min_pct: 0.5, max_pct: 0.98 });
+    if (!tankList.length) continue;
+    const meta = extractShipMetaFromProfile(profile);
+    const baseName = (profile.ship && profile.ship.name) ? String(profile.ship.name).trim() : 'Imported Ship';
+    let name = baseName || 'Imported Ship';
+    let idx = 2;
+    while (existingNames.has(name)) {
+      name = `${baseName} (${idx++})`;
     }
-    persistLastState();
-    render();
-    computeAndRender();
-    return true;
-  } catch (err) {
-    console.error('applyImportedShipPayload error', err);
-    return false;
+    existingNames.add(name);
+    presets[name] = tankList.map(t => ({ ...t }));
+    if (meta) metaStore[name] = meta;
+    importedNames.push(name);
   }
+  if (importedNames.length) {
+    savePresets(presets);
+    saveShipMeta(metaStore);
+    refreshPresetSelect();
+    const firstName = importedNames[0];
+    if (cfgSelect) cfgSelect.value = `preset:${firstName}`;
+    if (typeof applySelectionValue === 'function') {
+      applySelectionValue(`preset:${firstName}`);
+    }
+    computeAndRender();
+  }
+  return { count: importedNames.length, names: importedNames };
 }
 
-function pickShipEntry(payload) {
-  if (!payload) return null;
-  if (Array.isArray(payload.ships) && payload.ships.length) return payload.ships[0];
-  if (Array.isArray(payload) && payload.length) return payload[0];
-  if (payload.ship || payload.tanks || payload.hydrostatics) return payload;
-  return null;
+function collectShipEntries(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload.ships)) return payload.ships.filter(Boolean);
+  if (Array.isArray(payload)) return payload.filter(Boolean);
+  return [payload];
 }
 
 function normalizeShipProfile(entry) {
@@ -1306,8 +1326,9 @@ if (fileImportShip) {
     try {
       const text = await f.text();
       const json = JSON.parse(text);
-      const ok = await applyImportedShipPayload(json);
-      if (!ok) alert('Unable to parse ship data from file.');
+      const { count } = await importShipsFromPayload(json);
+      if (count === 0) alert('Unable to parse ship data from file.');
+      else alert(`${count} ship(s) imported from file.`);
     } catch (err) {
       console.error('Ship import failed', err);
       alert('Ship import failed. See console for details.');
