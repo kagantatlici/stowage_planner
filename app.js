@@ -101,10 +101,15 @@ const rsOthEl = document.getElementById('rs_oth_mt');
 const rsConstEl = document.getElementById('rs_const_mt');
 const rsConstLcgEl = document.getElementById('rs_const_lcg');
 const hydroSummaryEl = document.getElementById('hydro-summary');
+const rsMaxCargoEl = document.getElementById('rs-max-cargo');
+
+// Track last computed ballast total weight for Max Cargo view
+let LAST_BALLAST_W_MT = 0;
 
 // Restore persisted UI inputs (reverse-solver + config name) before any render
 restoreReverseInputs();
 restoreCfgName();
+try { updateMaxCargoView(); } catch {}
 
 // Persist on change
 [rsTargetDraftEl, rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
@@ -178,6 +183,8 @@ function persistReverseInputs() {
     };
     localStorage.setItem(LS_RS, JSON.stringify(payload));
   } catch {}
+  // Update Max Cargo hint when inputs change
+  try { updateMaxCargoView(); } catch {}
 }
 function restoreReverseInputs() {
   try {
@@ -198,6 +205,52 @@ function persistCfgName() {
 }
 function restoreCfgName() {
   try { const v = localStorage.getItem(LS_CFG_NAME); if (cfgNameInput && v != null) cfgNameInput.value = v; } catch {}
+}
+
+// Compute and show Max Cargo for the target draft using hydro table
+async function updateMaxCargoView() {
+  try {
+    if (!rsMaxCargoEl) return;
+    // Parse inputs (support comma decimals)
+    const parseNum = (el, fb = NaN) => {
+      if (!el) return fb;
+      const v = String(el.value || '').replace(',', '.');
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : fb;
+    };
+    const T = parseNum(rsTargetDraftEl, NaN);
+    const rhoWater = parseNum(rsRhoEl, (typeof SHIP_PARAMS.RHO_REF === 'number' ? SHIP_PARAMS.RHO_REF : 1.025));
+    const fo = parseNum(rsFoEl, 0);
+    const fw = parseNum(rsFwEl, 0);
+    const oth = parseNum(rsOthEl, 0);
+    const constW = parseNum(rsConstEl, 0);
+    // Hydro rows preference: Draft Calculator > local HYDRO_ROWS > load file
+    const rowsDC = getDCHydroRowsRaw();
+    let rows = (Array.isArray(rowsDC) && rowsDC.length) ? rowsDC : (HYDRO_ROWS && HYDRO_ROWS.length ? HYDRO_ROWS : (await ensureHydroLoaded()));
+    if (!Array.isArray(rows) || rows.length === 0 || !Number.isFinite(T)) {
+      rsMaxCargoEl.textContent = 'Max cargo: — mt';
+      return;
+    }
+    // rho_ref for converting SW->FW columns if needed
+    const { rho_ref: rhoDC } = getDCShipParamsRaw();
+    const rhoRefForRows = (typeof rhoDC === 'number' && rhoDC > 0) ? rhoDC : ((typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025);
+    const H = interpHydroShip(rows, T, rhoRefForRows);
+    const DIS_FW = H && Number.isFinite(H.DIS_FW) ? Number(H.DIS_FW) : NaN;
+    if (!Number.isFinite(DIS_FW)) {
+      rsMaxCargoEl.textContent = 'Max cargo: — mt';
+      return;
+    }
+    // Displacement at water density (t)
+    const W_dis = rhoWater * DIS_FW;
+    const light = (LIGHT_SHIP && Number.isFinite(LIGHT_SHIP.weight_mt)) ? Number(LIGHT_SHIP.weight_mt) : 0;
+    const ballast = Number.isFinite(LAST_BALLAST_W_MT) ? LAST_BALLAST_W_MT : 0;
+    const others = fo + fw + oth + constW + light + ballast;
+    const cargoMax = Math.max(0, W_dis - others);
+    const txt = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
+    rsMaxCargoEl.textContent = txt;
+  } catch {
+    if (rsMaxCargoEl) rsMaxCargoEl.textContent = 'Max cargo: — mt';
+  }
 }
 
 function loadPresets() {
@@ -1195,8 +1248,9 @@ function renderSummaryAndSvg(result) {
             <td style="text-align:right;">${(b.weight_mt||0).toFixed(1)}</td>
           </tr>`;
         }).join('');
-        const bTotV = ballastAllocs.reduce((s,b)=>s+(b.assigned_m3||0),0);
-        const bTotW = ballastAllocs.reduce((s,b)=>s+(b.weight_mt||0),0);
+    const bTotV = ballastAllocs.reduce((s,b)=>s+(b.assigned_m3||0),0);
+    const bTotW = ballastAllocs.reduce((s,b)=>s+(b.weight_mt||0),0);
+    try { LAST_BALLAST_W_MT = Number.isFinite(bTotW) ? bTotW : 0; } catch { LAST_BALLAST_W_MT = 0; }
         bEl.innerHTML = `
           <table class="table">
             <thead><tr><th>Ballast Tank</th><th style=\"text-align:right;\">%</th><th style=\"text-align:right;\">Vol (m³)</th><th style=\"text-align:right;\">ρ (t/m³)</th><th style=\"text-align:right;\">Weight (t)</th></tr></thead>
@@ -1992,6 +2046,8 @@ function loadDCShip(id) {
   } catch {
     return false;
   }
+  // Update Max Cargo hint after rendering (ballast weight may have changed)
+  try { updateMaxCargoView(); } catch {}
 }
 // Apply only ship metadata (LBP, hydro rows, LCGs) from currently active DC ship without altering tanks
 function applyActiveShipMetaOnly() {
