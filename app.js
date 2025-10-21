@@ -1252,7 +1252,6 @@ function computeVariants() {
   ensureUniqueParcelIDs();
   const vMin = computePlan(tanks, parcels);
   const vMax = computePlanMaxRemaining(tanks, parcels);
-  const vMaxK = computePlanMaxK(tanks, parcels);
   const vAgg = computePlanMinTanksAggressive(tanks, parcels);
   const vWing = computePlanSingleWingAlternative(tanks, parcels);
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
@@ -1286,7 +1285,7 @@ function computeVariants() {
   }
 
   const candidates = {
-    engine_min_k: { id: 'Engine — Min Tanks', res: vMin },
+    engine_min_k: { id: 'Engine — Max Empty Tanks', res: vMin },
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
@@ -1295,7 +1294,6 @@ function computeVariants() {
     ])),
     engine_single_wing: { id: 'Engine — Single-Wing (Ballast)', res: vWing },
     engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
-    engine_max_k: { id: 'Engine — Max Tanks (Target)', res: vMaxK },
     engine_max_remaining: { id: 'Engine — Max Cargo (All Max%)', res: vMax }
   };
 
@@ -1303,7 +1301,7 @@ function computeVariants() {
   const order = [
     'engine_min_k', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
-    'engine_single_wing','engine_min_k_aggressive','engine_max_k','engine_max_remaining'
+    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
   const seen = new Set();
   const out = {};
@@ -1324,7 +1322,7 @@ function fillVariantSelect() {
   const order = [
     'engine_min_k', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
-    'engine_single_wing','engine_min_k_aggressive','engine_max_k','engine_max_remaining'
+    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
   const opts = order.filter(k => variantsCache[k])
     .map(k => ({ key: k, label: variantsCache[k].id }));
