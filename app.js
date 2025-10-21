@@ -825,6 +825,34 @@ function renderSummaryAndSvg(result) {
     } catch {}
   }
 
+  // Requested vs loaded check (underfill alert)
+  try {
+    if (warnsEl) {
+      let html = '';
+      // Show engine warnings first (if any)
+      const di = diagnostics || {};
+      const engineWarns = Array.isArray(di.warnings) ? di.warnings : [];
+      if (engineWarns.length) {
+        html += engineWarns.map(w => `<div>${w}</div>`).join('');
+      }
+      // Compute requested cargo weight from parcels with specified volume
+      let requested = 0;
+      for (const p of parcels || []) {
+        const v = Number(p?.total_m3);
+        const r = Number(p?.density_kg_m3);
+        if (isFinite(v) && isFinite(r) && r > 0) requested += (v * r) / 1000.0;
+      }
+      // Compute loaded weight from cargo allocations only
+      let loaded = 0;
+      for (const a of allocations || []) loaded += (a.weight_mt || 0);
+      if (requested > 0 && loaded + 0.1 < requested) {
+        const diff = requested - loaded;
+        html = `<div style="color:#ef4444; font-weight:600;">Requested cargo ${requested.toFixed(1)} t; loaded ${loaded.toFixed(1)} t — short by ${diff.toFixed(1)} t.</div>` + html;
+      }
+      warnsEl.innerHTML = html;
+    }
+  } catch {}
+
   // Hydro summary (optional): compute F/M/A drafts, trim, displacement, DWT if hydro rows & LCG map available
   try {
     const hbox = hydroSummaryEl;
@@ -1224,6 +1252,7 @@ function computeVariants() {
   ensureUniqueParcelIDs();
   const vMin = computePlan(tanks, parcels);
   const vMax = computePlanMaxRemaining(tanks, parcels);
+  const vMaxK = computePlanMaxK(tanks, parcels);
   const vAgg = computePlanMinTanksAggressive(tanks, parcels);
   const vWing = computePlanSingleWingAlternative(tanks, parcels);
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
@@ -1266,14 +1295,15 @@ function computeVariants() {
     ])),
     engine_single_wing: { id: 'Engine — Single-Wing (Ballast)', res: vWing },
     engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
-    engine_max_remaining: { id: 'Engine — Max Remaining', res: vMax }
+    engine_max_k: { id: 'Engine — Max Tanks (Target)', res: vMaxK },
+    engine_max_remaining: { id: 'Engine — Max Cargo (All Max%)', res: vMax }
   };
 
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
     'engine_min_k', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
-    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
+    'engine_single_wing','engine_min_k_aggressive','engine_max_k','engine_max_remaining'
   ];
   const seen = new Set();
   const out = {};
@@ -1294,7 +1324,7 @@ function fillVariantSelect() {
   const order = [
     'engine_min_k', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
-    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
+    'engine_single_wing','engine_min_k_aggressive','engine_max_k','engine_max_remaining'
   ];
   const opts = order.filter(k => variantsCache[k])
     .map(k => ({ key: k, label: variantsCache[k].id }));

@@ -855,156 +855,125 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     reasoning_trace.push(traceEntry);
   }
 
-  // Remaining parcel distribution across remaining symmetric pairs, prefer 98%
+  // Remaining parcel distribution
   if (remaining) {
-    let remLeft = remaining.total_m3 ?? Infinity; // treat as unbounded if not given
-    let freePairs = getFreePairs();
-    // Also consider free center tanks for remaining parcel
+    const Vrem = remaining.total_m3;
+    const freePairsAll = getFreePairs();
     const freeCentersList = centers.filter(c => !usedCenters.has(c.id));
-    // Prefer buffer pairs first when leftover is small
-    if (bufferEnabled && remLeft !== Infinity && remLeft <= bufferSmallThreshold) {
-      const buf = freePairs.filter(idx => bufferPairs.has(idx));
-      const non = freePairs.filter(idx => !bufferPairs.has(idx));
-      freePairs = [...buf, ...non];
-    }
-
-    // Compute total capacity at max across free pairs and centers
-    let capSum = 0;
-    for (const idx of freePairs) {
-      const pair = pairs[idx];
-      const CmaxPair = pair.port.volume_m3 * pair.port.max_pct + pair.starboard.volume_m3 * pair.starboard.max_pct;
-      capSum += CmaxPair;
-    }
-    for (const c of freeCentersList) {
-      capSum += c.volume_m3 * c.max_pct;
-    }
-    if (remaining.total_m3 == null) {
-      remLeft = capSum; // fill all capacity if unspecified
-    } else {
-      remLeft = Math.min(remLeft, capSum);
-    }
-
-    const reserved = [];
-    // First, try to fill center tanks if any
-    for (const c of freeCentersList) {
-      if (remLeft <= 1e-9) break;
-      const minC = c.volume_m3 * c.min_pct;
-      const maxC = c.volume_m3 * c.max_pct;
-      let v = 0;
-      if (remLeft + 1e-9 < minC) {
-        if (bandEnabled && bandSlotsLeft > 0) {
-          const bandMinC = c.volume_m3 * bandMinPct;
-          if (remLeft + 1e-9 >= bandMinC) {
-            v = Math.min(remLeft, maxC);
-            bandSlotsLeft -= 1;
-            warnings.push(`Allowed underfill on ${c.id} (${(v / c.volume_m3 * 100).toFixed(1)}%) to fit remaining cargo.`);
-          } else {
-            continue;
-          }
-        } else {
-          continue;
-        }
+    if (Number.isFinite(Vrem)) {
+      // Treat FR like a fixed parcel: select subset and water-fill to exactly Vrem
+      const isSmallParcel = Vrem > 0 && Vrem <= bufferSmallThreshold;
+      const freePairsNoBuffer = freePairsAll.filter(idx => !bufferPairs.has(idx));
+      let selection = chooseK_nonuniform(Vrem, isSmallParcel ? freePairsAll : freePairsNoBuffer, pairs, freeCentersList, mode, { bandMinPct, bandSlotsLeft });
+      if (!selection.chosen_k) {
+        // Try releasing buffer if it helps
+        selection = chooseK_nonuniform(Vrem, freePairsAll, pairs, freeCentersList, mode, { bandMinPct, bandSlotsLeft });
+      }
+      const { chosen_k } = selection;
+      /** @type {TraceEntry} */
+      const traceEntry = {
+        parcel_id: remaining.id,
+        V: Vrem,
+        Cmin: CminRef,
+        Cmax: CmaxRef,
+        k_low: selection.k_low,
+        k_high: selection.k_high,
+        chosen_k: chosen_k ?? 0,
+        parity_adjustment: chosen_k == null ? 'infeasible' : selection.parity_adjustment,
+        per_tank_v: chosen_k ? Vrem / chosen_k : 0,
+        violates: false,
+        reserved_pairs: [],
+        reason: selection.reason || 'FR water-fill'
+      };
+      if (!chosen_k) {
+        errors.push(`${remaining.name || remaining.id}: cannot be placed with current tank limits.`);
+        reasoning_trace.push(traceEntry);
       } else {
-        v = Math.min(remLeft, maxC);
-      }
-      addAllocation(c, remaining, v);
-      usedCenters.add(c.id);
-      reserved.push(c.id);
-      remLeft -= v;
-    }
-    for (const idx of freePairs) {
-      if (remLeft <= 1e-9) break;
-      const pair = pairs[idx];
-      const port = pair.port;
-      const star = pair.starboard;
-      const minPort = port.volume_m3 * port.min_pct;
-      const minStar = star.volume_m3 * star.min_pct;
-      const maxPort = port.volume_m3 * port.max_pct;
-      const maxStar = star.volume_m3 * star.max_pct;
-      const CminPair = minPort + minStar;
-      const CmaxPair = maxPort + maxStar;
-      let useBandHere = false; let bandOn = null; // 'port'|'star' or null
-      if (remLeft + 1e-9 < CminPair) {
-        if (bandEnabled && bandSlotsLeft > 0) {
-          const bandMinPort = port.volume_m3 * bandMinPct;
-          const bandMinStar = star.volume_m3 * bandMinPct;
-          const redPort = Math.max(0, minPort - bandMinPort);
-          const redStar = Math.max(0, minStar - bandMinStar);
-          const maxRed = Math.max(redPort, redStar);
-          if (remLeft + 1e-9 >= CminPair - maxRed) {
-            useBandHere = true;
-            bandOn = redPort >= redStar ? 'port' : 'star';
-          } else {
-            continue; // cannot activate this pair while respecting limits/band
+        const chosenPairIdxs = selection.reservedPairs || [];
+        for (const idx of chosenPairIdxs) { usedPairs.add(idx); traceEntry.reserved_pairs.push(`COT${idx}P/S`); }
+        let centerTank = null;
+        if (chosen_k % 2 === 1) {
+          centerTank = selection.center;
+          if (!centerTank) { errors.push(`${remaining.name || remaining.id}: needs a center tank but none available.`); reasoning_trace.push(traceEntry); }
+          else { usedCenters.add(centerTank.id); traceEntry.reserved_pairs.push(centerTank.id); }
+        }
+        // Build vessels and water-fill
+        /** @type {{tank: Tank, min:number, max:number, vol:number}[]} */
+        const vessels = [];
+        for (const idx of chosenPairIdxs) {
+          const pr = pairs[idx];
+          vessels.push({ tank: pr.port, min: pr.port.volume_m3 * pr.port.min_pct, max: pr.port.volume_m3 * pr.port.max_pct, vol: 0 });
+          vessels.push({ tank: pr.starboard, min: pr.starboard.volume_m3 * pr.starboard.min_pct, max: pr.starboard.volume_m3 * pr.starboard.max_pct, vol: 0 });
+        }
+        if (centerTank) {
+          vessels.push({ tank: centerTank, min: centerTank.volume_m3 * centerTank.min_pct, max: centerTank.volume_m3 * centerTank.max_pct, vol: 0 });
+        }
+        let sumMin = vessels.reduce((s, e) => s + e.min, 0);
+        const sumMax = vessels.reduce((s, e) => s + e.max, 0);
+        let bandApplied = false; let bandTankId = null;
+        if (Vrem + 1e-9 < sumMin && bandEnabled && bandSlotsLeft > 0) {
+          let bestReduction = 0; let bestIdx = -1;
+          vessels.forEach((e, i) => {
+            const bandMinV = e.tank.volume_m3 * bandMinPct;
+            const red = Math.max(0, e.min - bandMinV);
+            if (red > bestReduction) { bestReduction = red; bestIdx = i; }
+          });
+          if (bestReduction > 0 && Vrem + 1e-9 >= (sumMin - bestReduction)) {
+            const e = vessels[bestIdx];
+            e.min = e.tank.volume_m3 * bandMinPct;
+            sumMin -= bestReduction;
+            bandApplied = true; bandTankId = e.tank.id;
           }
+        }
+        if (Vrem + 1e-9 < sumMin || Vrem > sumMax + 1e-9) {
+          const minMsg = `minimum required = ${sumMin.toFixed(1)} m³`;
+          const maxMsg = `maximum allowed = ${sumMax.toFixed(1)} m³`;
+          errors.push(`${remaining.name || remaining.id}: requested ${Vrem} m³ is outside allowable range [${minMsg}, ${maxMsg}].`);
+          reasoning_trace.push(traceEntry);
         } else {
-          continue; // cannot activate this pair while respecting min limits
-        }
-      }
-      const take = Math.min(remLeft, CmaxPair);
-      // Allocate per-tank: ensure >= min, <= max, aim for symmetry
-      let vPort = useBandHere && bandOn==='port' ? port.volume_m3 * bandMinPct : minPort;
-      let vStar = useBandHere && bandOn==='star' ? star.volume_m3 * bandMinPct : minStar;
-      let pairRem = take - (vPort + vStar);
-      if (pairRem > 1e-9) {
-        // Try equal increment
-        const step = Math.min(pairRem / 2, maxPort - vPort, maxStar - vStar);
-        vPort += step;
-        vStar += step;
-        pairRem -= step * 2;
-        if (pairRem > 1e-9) {
-          // Fill remaining headroom starting with the tank with more headroom
-          const headPort = maxPort - vPort;
-          const headStar = maxStar - vStar;
-          if (headPort >= headStar) {
-            const addP = Math.min(headPort, pairRem);
-            vPort += addP;
-            pairRem -= addP;
-            if (pairRem > 1e-9) {
-              const addS = Math.min(maxStar - vStar, pairRem);
-              vStar += addS;
-              pairRem -= addS;
+          vessels.forEach(e => { e.vol = e.min; });
+          let rem = Vrem - sumMin;
+          while (rem > 1e-9) {
+            const unsat = vessels.filter(e => e.vol + 1e-9 < e.max);
+            if (unsat.length === 0) break;
+            const delta = rem / unsat.length;
+            let consumed = 0;
+            for (const e of unsat) {
+              const add = Math.min(delta, e.max - e.vol);
+              e.vol += add;
+              consumed += add;
             }
-          } else {
-            const addS = Math.min(headStar, pairRem);
-            vStar += addS;
-            pairRem -= addS;
-            if (pairRem > 1e-9) {
-              const addP = Math.min(maxPort - vPort, pairRem);
-              vPort += addP;
-              pairRem -= addP;
-            }
+            rem -= consumed;
+            if (consumed <= 1e-9) break;
           }
+          for (const e of vessels) addAllocation(e.tank, remaining, e.vol);
+          if (bandApplied) {
+            bandSlotsLeft -= 1;
+            const v = vessels.find(v=>v.tank.id===bandTankId);
+            warnings.push(`Allowed underfill on ${bandTankId} (${(v.vol / v.tank.volume_m3 * 100).toFixed(1)}%) to fit ${remaining.name || remaining.id}.`);
+            bandUsedTankIds.add(bandTankId);
+          }
+          reasoning_trace.push(traceEntry);
         }
       }
-      addAllocation(port, remaining, vPort);
-      addAllocation(star, remaining, vStar);
-      if (useBandHere) {
-        bandSlotsLeft -= 1;
-        const tId = bandOn==='port'?port.id:star.id;
-        bandUsedTankIds.add(tId);
-        const pct = ( (bandOn==='port'?vPort:vStar) / (bandOn==='port'?port.volume_m3:star.volume_m3) ) * 100;
-        warnings.push(`Allowed underfill on ${tId} (${pct.toFixed(1)}%) to fit remaining cargo.`);
+    } else {
+      // No specific target: fill all free capacity to max
+      let reserved = [];
+      // centers first
+      for (const c of freeCentersList) {
+        addAllocation(c, remaining, c.volume_m3 * c.max_pct);
+        usedCenters.add(c.id);
+        reserved.push(c.id);
       }
-      usedPairs.add(idx);
-      reserved.push(`COT${idx}P/S`);
-      remLeft -= vPort + vStar;
+      for (const idx of freePairsAll) {
+        const pr = pairs[idx];
+        addAllocation(pr.port, remaining, pr.port.volume_m3 * pr.port.max_pct);
+        addAllocation(pr.starboard, remaining, pr.starboard.volume_m3 * pr.starboard.max_pct);
+        usedPairs.add(idx);
+        reserved.push(`COT${idx}P/S`);
+      }
+      reasoning_trace.push({ parcel_id: remaining.id, V: -1, Cmin: CminRef, Cmax: CmaxRef, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: reserved, reason: 'Remaining parcel filled to max capacity' });
     }
-    // Trace for remaining
-    reasoning_trace.push({
-      parcel_id: remaining.id,
-      V: remaining.total_m3 ?? -1,
-      Cmin: CminRef,
-      Cmax: CmaxRef,
-      k_low: 0,
-      k_high: 0,
-      chosen_k: 0,
-      parity_adjustment: 'none',
-      per_tank_v: 0,
-      violates: false,
-      reserved_pairs: reserved,
-      reason: 'Remaining parcel filled across free symmetric pairs up to max'
-    });
   }
 
   // Diagnostics: weights and balance
