@@ -48,8 +48,11 @@
       <section id="view-cargo" class="panel view active">
         <h2>Cargo Input</h2>
         <div class="card quick-plan" style="margin-bottom:12px;">
-          <h3 style="margin:6px 0 8px; font-size:14px;">Quick Plan — Reverse from Draft</h3>
           <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; align-items:end;">
+            <label style="display:flex; align-items:center; gap:6px;">
+              <input id="rs_enable" type="checkbox" checked />
+              <span>Enable Target Draft</span>
+            </label>
             <label>
               Target Max Draft (m)
               <input id="rs_target_draft" type="number" step="0.01" value="10.5" />
@@ -85,7 +88,6 @@
           <div id="rs-max-cargo" style="margin-top:6px; color:#cbd5e1; font-size:13px;">
             Max cargo: — mt
           </div>
-          <small style="display:block; margin-top:6px; color:#9aa3b2;">Keeps current parcels. Solver finds max cargo for target mean draft; distributes with current tank limits.</small>
         </div>
         <div id="parcel-editor"></div>
         <div class="parcel-actions">

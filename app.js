@@ -45,6 +45,7 @@ const btnAddCenter = document.getElementById('btn-add-center');
 const btnImportShip = document.getElementById('btn-import-ship');
 const btnClearShips = document.getElementById('btn-clear-ships');
 // Reverse-solver inputs in Cargo view
+const rsEnableEl = document.getElementById('rs_enable');
 const rsTargetDraftEl = document.getElementById('rs_target_draft');
 const rsRhoEl = document.getElementById('rs_rho');
 const rsFoEl = document.getElementById('rs_fo_mt');
@@ -81,6 +82,9 @@ if (variantSelect) {
 if (btnSolveDraft) {
   btnSolveDraft.style.display = 'none';
 }
+
+// Initialize Target Draft toggle UI state
+try { if (typeof applyDraftToggleUI === 'function') applyDraftToggleUI(); } catch {}
 
 const hydroSummaryEl = document.getElementById('hydro-summary');
 
@@ -636,7 +640,7 @@ function renderParcelEditor() {
       <td><input value="${p.name}" data-idx="${idx}" data-field="name" style="width:120px"/></td>
       <td><input type="number" step="0.001" min="0" value="${p.total_m3 != null ? Number(p.total_m3).toFixed(3) : ''}" data-idx="${idx}" data-field="total_m3" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
       <td><input type="number" step="0.1" min="0" value="${wt!=='' ? Number(wt).toFixed(1) : ''}" data-idx="${idx}" data-field="weight_mt" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
-      <td><input type="checkbox" ${p.fill_remaining?'checked':''} data-idx="${idx}" data-field="fill_remaining" ${idx===parcels.length-1 ? '' : 'disabled'}/></td>
+      <td><input type="checkbox" ${p.fill_remaining?'checked':''} data-idx="${idx}" data-field="fill_remaining" /></td>
       <td><input type="number" step="0.001" min="0" value="${((p.density_kg_m3||0)/1000).toFixed(3)}" data-idx="${idx}" data-field="density_g_cm3" style="width:80px"/></td>
       <td><input type="number" step="1" value="${p.temperature_c}" data-idx="${idx}" data-field="temperature_c" style="width:70px"/></td>
       <td><input type="color" value="${p.color || '#888888'}" data-idx="${idx}" data-field="color"/></td>
@@ -693,22 +697,37 @@ function renderParcelEditor() {
           target.value = unique;
         }
       }
-      // Ensure only last parcel can be fill_remaining
-      if (field === 'fill_remaining' && val === true && idx !== parcels.length - 1) return;
+      // Allow any row to be Fill Remaining; ensure only one at a time
+      if (field === 'fill_remaining' && val === true) {
+        parcels = parcels.map((p, i) => i === idx ? p : ({ ...p, fill_remaining: false }));
+      }
       const mappedField = field === 'density_g_cm3' ? 'density_kg_m3' : field;
       let nextParcel = { ...parcels[idx] };
       nextParcel[mappedField] = val;
       if (field === 'fill_remaining' && val) {
-        // If Max Cargo is available and density is known, transfer to volume
+        // If Max Cargo is available and density is known, transfer remaining (after other parcels) to this parcel
         const dens = Number((parcels[idx] && parcels[idx].density_kg_m3) || 0);
         if (Number.isFinite(LAST_MAX_CARGO_MT) && LAST_MAX_CARGO_MT > 0 && Number.isFinite(dens) && dens > 0) {
-          const vol = (LAST_MAX_CARGO_MT * 1000) / dens;
+          let otherW = 0;
+          for (let i = 0; i < parcels.length; i++) {
+            if (i === idx) continue;
+            const op = parcels[i];
+            const ov = Number(op?.total_m3);
+            const orho = Number(op?.density_kg_m3);
+            if (isFinite(ov) && isFinite(orho) && orho > 0 && ov > 0) {
+              otherW += (ov * orho) / 1000;
+            }
+          }
+          const remainW = Math.max(0, LAST_MAX_CARGO_MT - otherW);
+          const vol = (remainW * 1000) / dens;
           nextParcel.total_m3 = vol;
         } else {
           nextParcel.total_m3 = undefined;
         }
       }
       parcels[idx] = nextParcel;
+      // keep FR parcel in sync after any change
+      try { if (typeof updateFRParcelFromInputs === 'function') { const changed = updateFRParcelFromInputs(); if (changed) parcels = parcels.slice(); } } catch {}
       persistLastState();
       render();
     });
@@ -717,10 +736,15 @@ function renderParcelEditor() {
     btn.addEventListener('click', () => {
       const idx = Number(btn.getAttribute('data-idx'));
       parcels.splice(idx, 1);
-      // Ensure last parcel has fill_remaining enabled state preserved only if it was last
-      if (parcels.length > 0) {
-        parcels = parcels.map((p, i) => i === parcels.length - 1 ? p : { ...p, fill_remaining: false });
-      }
+      // Ensure only one fill_remaining remains true at most
+      let seen = false;
+      parcels = parcels.map(p => {
+        if (p.fill_remaining) {
+          if (seen) return { ...p, fill_remaining: false };
+          seen = true; return p;
+        }
+        return p;
+      });
       persistLastState();
       render();
     });
@@ -1834,6 +1858,25 @@ window.stowageEngine = { computePlanMaxRemaining, computePlanMinTanksAggressive 
 // ---- Max Cargo (from target draft) ----
 let LAST_MAX_CARGO_MT = null;
 
+// Toggle handling for Target Draft input
+function applyDraftToggleUI() {
+  try {
+    if (!rsEnableEl || !rsTargetDraftEl) return;
+    const enabled = !!rsEnableEl.checked;
+    if (!enabled) {
+      if (rsTargetDraftEl.value !== '') rsTargetDraftEl.setAttribute('data-prev', rsTargetDraftEl.value);
+      rsTargetDraftEl.value = '';
+      rsTargetDraftEl.disabled = true;
+    } else {
+      rsTargetDraftEl.disabled = false;
+      if (!rsTargetDraftEl.value) {
+        const prev = rsTargetDraftEl.getAttribute('data-prev');
+        rsTargetDraftEl.value = prev != null ? prev : '10.5';
+      }
+    }
+  } catch {}
+}
+
 function getRSInputs() {
   const parseNum = (el, fb = NaN) => {
     if (!el) return fb;
@@ -1852,10 +1895,41 @@ function getRSInputs() {
   };
 }
 
+function computeParcelWeightMT(p) {
+  const v = Number(p?.total_m3);
+  const r = Number(p?.density_kg_m3);
+  if (!isFinite(v) || !isFinite(r) || r <= 0 || v <= 0) return 0;
+  return (v * r) / 1000; // tons
+}
+
+function updateFRParcelFromInputs() {
+  try {
+    const idx = Array.isArray(parcels) ? parcels.findIndex(pp => !!pp.fill_remaining) : -1;
+    if (idx < 0) return false;
+    if (!Number.isFinite(LAST_MAX_CARGO_MT) || LAST_MAX_CARGO_MT <= 0) return false;
+    const dens = Number(parcels[idx]?.density_kg_m3 || 0);
+    if (!isFinite(dens) || dens <= 0) return false;
+    let otherW = 0;
+    for (let i = 0; i < parcels.length; i++) {
+      if (i === idx) continue;
+      otherW += computeParcelWeightMT(parcels[i]);
+    }
+    const remainW = Math.max(0, LAST_MAX_CARGO_MT - otherW);
+    const vol = (remainW * 1000) / dens;
+    const cur = Number(parcels[idx].total_m3);
+    if (!isFinite(cur) || Math.abs(cur - vol) > 1e-6) {
+      parcels[idx] = { ...parcels[idx], total_m3: vol };
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function updateMaxCargoView() {
   try {
     LAST_MAX_CARGO_MT = null;
     if (!rsMaxCargoEl) return;
+    if (rsEnableEl && !rsEnableEl.checked) { rsMaxCargoEl.textContent = 'Max cargo: — mt'; return; }
     const { T, rho, fo, fw, oth, constW } = getRSInputs();
     if (!Array.isArray(HYDRO_ROWS) || HYDRO_ROWS.length === 0 || !Number.isFinite(T)) {
       rsMaxCargoEl.textContent = 'Max cargo: — mt';
@@ -1870,6 +1944,9 @@ function updateMaxCargoView() {
     const cargoMax = Math.max(0, W_dis - others);
     LAST_MAX_CARGO_MT = cargoMax;
     rsMaxCargoEl.textContent = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
+    // keep FR parcel in sync if exists
+    const changed = updateFRParcelFromInputs();
+    if (changed) { persistLastState(); render(); }
   } catch {
     LAST_MAX_CARGO_MT = null;
     if (rsMaxCargoEl) rsMaxCargoEl.textContent = 'Max cargo: — mt';
@@ -1882,6 +1959,7 @@ try {
     .filter(Boolean)
     .forEach(el => el.addEventListener('input', updateMaxCargoView));
 } catch {}
+try { if (rsEnableEl) rsEnableEl.addEventListener('change', updateMaxCargoView); } catch {}
 try { updateMaxCargoView(); } catch {}
 
 function interpHydro(rows, T) {
