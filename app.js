@@ -1257,6 +1257,56 @@ function computeVariants() {
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
   const altList = computePlanMinKAlternatives(tanks, parcels, 5) || [];
 
+  // Helper: detect band underfill usage in diagnostics (disallowed for Min Trim variant)
+  const usedBand = (res) => {
+    try {
+      const ws = res?.diagnostics?.warnings || [];
+      return ws.some(w => /underfill band|Allowed underfill/i.test(String(w||'')));
+    } catch { return false; }
+  };
+  // Helper: requested cargo weight from parcels (t)
+  const requestedTons = (() => {
+    let req = 0;
+    try {
+      for (const p of parcels || []) {
+        const v = Number(p?.total_m3);
+        const r = Number(p?.density_kg_m3);
+        if (isFinite(v) && isFinite(r) && r > 0) req += (v * r) / 1000.0;
+      }
+    } catch {}
+    return req;
+  })();
+  // Helper: compute loaded cargo weight from allocations (t)
+  const loadedTons = (res) => (res?.allocations || []).reduce((s,a)=>s + (Number(a?.weight_mt)||0), 0);
+  // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
+  let vMinTrim = null;
+  try {
+    const cands = [];
+    if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
+    for (const r of altList) if (r && Array.isArray(r.allocations)) cands.push(r);
+    // Filter infeasible for our spec: underfill band used or under-loaded vs requested (>0)
+    const tol = 0.1; // tons
+    const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors||[]).length);
+    let best = null;
+    for (const r of feasible) {
+      const metrics = computeHydroForAllocations((r.allocations||[]));
+      if (!metrics || !isFinite(metrics.Trim)) continue; // need hydro for trim
+      const score = Math.abs(metrics.Trim);
+      // tie-breakers: lower P/S imbalance, higher empty tank count
+      const imb = Number(r?.diagnostics?.imbalance_pct) || 0;
+      // empty tanks: included - used
+      const usedTankIds = new Set((r.allocations||[]).map(a => a.tank_id));
+      const emptyCount = (tanks.filter(t=>t.included).length) - usedTankIds.size;
+      const key = { score, imb, empty: -emptyCount }; // empty negated to prefer larger
+      if (!best) best = { r, key };
+      else {
+        const a = best.key, b = key;
+        if (b.score < a.score || (b.score === a.score && (b.imb < a.imb || (b.imb === a.imb && b.empty < a.empty)))) best = { r, key };
+      }
+    }
+    vMinTrim = best ? best.r : null;
+  } catch {}
+
   function planSig(res) {
     if (!res || !Array.isArray(res.allocations)) return '';
     return res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`).sort().join('|');
@@ -1286,6 +1336,7 @@ function computeVariants() {
 
   const candidates = {
     engine_min_k: { id: 'Engine — Max Empty Tanks', res: vMin },
+    engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
@@ -1299,7 +1350,7 @@ function computeVariants() {
 
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
-    'engine_min_k', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1320,7 +1371,7 @@ function computeVariants() {
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
-    'engine_min_k', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
