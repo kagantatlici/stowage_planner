@@ -938,7 +938,16 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
       // Treat FR like a fixed parcel: select subset and water-fill to exactly Vrem
       const isSmallParcel = Vrem > 0 && Vrem <= bufferSmallThreshold;
       const freePairsNoBuffer = freePairsAll.filter(idx => !bufferPairs.has(idx));
-      let selection = chooseK_nonuniform(Vrem, isSmallParcel ? freePairsAll : freePairsNoBuffer, pairs, freeCentersList, mode, { bandMinPct, bandSlotsLeft });
+      // Honor forced selection policy for remaining parcel if provided
+      let selection = null;
+      if (policy && policy.forcedSelection && policy.forcedSelection[remaining.id]) {
+        const fs = policy.forcedSelection[remaining.id];
+        const rp = Array.isArray(fs.reservedPairs) ? fs.reservedPairs.slice() : [];
+        const useCenter = fs.center ? (freeCentersList.find(c=>c.id===fs.center) || null) : null;
+        selection = { chosen_k: useCenter ? (rp.length * 2 + 1) : (rp.length * 2), reservedPairs: rp, center: useCenter, k_low: 0, k_high: 0, parity_adjustment: 'none', reason: 'forced selection' };
+      } else {
+        selection = chooseK_nonuniform(Vrem, isSmallParcel ? freePairsAll : freePairsNoBuffer, pairs, freeCentersList, mode, { bandMinPct, bandSlotsLeft });
+      }
       if (!selection.chosen_k) {
         // Try releasing buffer if it helps
         selection = chooseK_nonuniform(Vrem, freePairsAll, pairs, freeCentersList, mode, { bandMinPct, bandSlotsLeft });

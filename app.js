@@ -1302,6 +1302,7 @@ function computeVariants() {
   let vMinTrim = null;
   let vMinTrimAlts = [];
   let vEvenKeel = null;
+  let vEvenKeelUse = null;
   try {
     const cands = [];
     if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
@@ -1356,6 +1357,19 @@ function computeVariants() {
     } catch {}
   } catch {}
 
+  // Only keep Even Keel if it meaningfully improves Trim vs Min Trim (or if Min Trim is absent)
+  try {
+    if (vEvenKeel && Array.isArray(vEvenKeel.allocations)) {
+      const ekM = computeHydroForAllocations(vEvenKeel.allocations||[]);
+      const mtM = (vMinTrim && Array.isArray(vMinTrim.allocations)) ? computeHydroForAllocations(vMinTrim.allocations||[]) : null;
+      if (ekM && isFinite(ekM.Trim)) {
+        if (!mtM || !isFinite(mtM.Trim) || Math.abs(mtM.Trim) - Math.abs(ekM.Trim) > 1e-3) {
+          vEvenKeelUse = vEvenKeel;
+        }
+      }
+    }
+  } catch {}
+
   function planSig(res) {
     if (!res || !Array.isArray(res.allocations)) return '';
     return res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`).sort().join('|');
@@ -1388,7 +1402,7 @@ function computeVariants() {
     engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
     engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
     engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
-    engine_even_keel: vEvenKeel ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeel } : undefined,
+    engine_even_keel: vEvenKeelUse ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeelUse } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     engine_all_max: (vAllMax && requestedTons > 0 && (loadedTons(vAllMax) + 0.1 < requestedTons)) ? { id: 'Engine — All Max (short)', res: vAllMax } : undefined,
     // Alternatives at same minimal k
