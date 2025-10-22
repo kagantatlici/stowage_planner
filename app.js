@@ -1282,6 +1282,7 @@ function computeVariants() {
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
   let vMinTrimAlts = [];
+  let vEvenKeel = null;
   try {
     const cands = [];
     if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
@@ -1311,6 +1312,29 @@ function computeVariants() {
         if (!seen.has(s)) { seen.add(s); vMinTrimAlts.push(improved[i].res); }
       }
     }
+    // Build Even Keel candidate by forcing all pairs (including SLOPs) and optimizing trim across all pairs
+    try {
+      const fixedParcels = parcels.filter(p=>!p.fill_remaining);
+      const targetParcel = fixedParcels[0] || parcels[0];
+      if (targetParcel) {
+        // Collect all available pair indices
+        const pairIdxs = Array.from(new Set(
+          (tanks||[])
+            .filter(t=>t.included && (t.side==='port'||t.side==='starboard'))
+            .map(t=>cotPairIndex(t.id))
+            .filter(i=>i!=null)
+        ));
+        if (pairIdxs.length) {
+          const policy = { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } } };
+          const baseAll = computePlanMinKPolicy(tanks, parcels, policy);
+          if (baseAll && Array.isArray(baseAll.allocations) && !(baseAll?.diagnostics?.errors||[]).length) {
+            const opt = optimizeTrimWithinSelection(baseAll, { includeSlops: true }) || baseAll;
+            const met = computeHydroForAllocations(opt.allocations||[]);
+            if (met && isFinite(met.Trim)) vEvenKeel = opt;
+          }
+        }
+      }
+    } catch {}
   } catch {}
 
   function planSig(res) {
@@ -1345,6 +1369,7 @@ function computeVariants() {
     engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
     engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
     engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
+    engine_even_keel: vEvenKeel ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeel } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
@@ -1355,10 +1380,10 @@ function computeVariants() {
     engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
     engine_max_remaining: { id: 'Engine — Max Cargo (All Max%)', res: vMax }
   };
-
+  
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1373,13 +1398,27 @@ function computeVariants() {
     seen.add(sig);
     out[k] = entry;
   }
+
+  // Hide Max Empty Tanks if another candidate uses the same used tank set (same empty count and identities)
+  try {
+    const usedSet = (res) => {
+      const s = new Set();
+      (res.allocations||[]).forEach(a=>s.add(a.tank_id));
+      return Array.from(s).sort().join('|');
+    };
+    const minTrimKey = out['engine_min_trim'] ? usedSet(out['engine_min_trim'].res) : null;
+    if (minTrimKey && out['engine_min_k']) {
+      const minKKey = usedSet(out['engine_min_k'].res);
+      if (minKKey === minTrimKey) delete out['engine_min_k'];
+    }
+  } catch {}
   return out;
 }
 
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1946,8 +1985,9 @@ window.stowageEngine = { computePlanMaxRemaining, computePlanMinTanksAggressive 
 let LAST_MAX_CARGO_MT = null;
 
 // ---- Min-Trim optimizer (intra-selection; no band; min/max respected) ----
-function optimizeTrimWithinSelection(baseRes) {
+function optimizeTrimWithinSelection(baseRes, opts) {
   try {
+    const options = Object.assign({ includeSlops: false }, opts||{});
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     // Single fixed parcel only (keep scope tight)
     const parcelIds = Array.from(new Set(baseRes.allocations.map(a=>a.parcel_id)));
@@ -1980,7 +2020,7 @@ function optimizeTrimWithinSelection(baseRes) {
     const maxCot = cotIdxs.length ? Math.max(...cotIdxs) : 0;
     const norm = (i) => (i >= 1000 ? maxCot + 1 : i);
     for (const [idx, ent] of usedPairs.entries()) {
-      if (idx >= 1000) continue; // skip slops
+      if (!options.includeSlops && idx >= 1000) continue; // skip slops unless allowed
       if (!ent.P || !ent.S) continue;
       let xP = TANK_LCG_MAP.has(ent.P) ? Number(TANK_LCG_MAP.get(ent.P)) : null;
       let xS = TANK_LCG_MAP.has(ent.S) ? Number(TANK_LCG_MAP.get(ent.S)) : null;
@@ -2017,33 +2057,33 @@ function optimizeTrimWithinSelection(baseRes) {
       let changed = true; let guard = 0;
       while (changed && guard++ < 200) {
         changed = false;
-        const wantFwd = trim > 0; // +stern → move fwd
-        const fwdOrder = wantFwd ? [...pairs].sort((a,b)=>b.lcg - a.lcg) : [...pairs].sort((a,b)=>a.lcg - b.lcg);
-        const aftOrder = wantFwd ? [...pairs].sort((a,b)=>a.lcg - b.lcg) : [...pairs].sort((a,b)=>b.lcg - a.lcg);
+        const wantFwd = trim > 0; // +stern → need to move cargo forward
+        // Try all donor/receiver pair combinations; pick first that improves
         let didOne = false;
-        for (let i=0; i<Math.min(fwdOrder.length, aftOrder.length); i++) {
-          const pf = fwdOrder[i];
-          const pa = aftOrder[i];
-          if (pf.idx === pa.idx) continue;
-          const limPf = lim.get(pf.P); const limSf = lim.get(pf.S);
-          const limPa = lim.get(pa.P); const limSa = lim.get(pa.S);
-          const vPf = vol.get(pf.P)||0, vSf = vol.get(pf.S)||0;
-          const vPa = vol.get(pa.P)||0, vSa = vol.get(pa.S)||0;
-          const addCap = Math.min((limPf.max - vPf), (limSf.max - vSf));
-          const redCap = Math.min((vPa - limPa.min), (vSa - limSa.min));
-          const delta = Math.min(addCap, redCap, step);
-          if (delta <= eps) continue;
-          // apply tentative move: +delta on forward pair (both sides), -delta on aft pair
-          vol.set(pf.P, vPf + delta); vol.set(pf.S, vSf + delta);
-          vol.set(pa.P, vPa - delta); vol.set(pa.S, vSa - delta);
-          const newTrim = evalTrim();
-          if (newTrim != null && Math.abs(newTrim) + 1e-5 < Math.abs(trim)) {
-            trim = newTrim; changed = true; improved = true; didOne = true; break;
-          } else {
-            // revert
-            vol.set(pf.P, vPf); vol.set(pf.S, vSf);
-            vol.set(pa.P, vPa); vol.set(pa.S, vSa);
+        const orderRecv = wantFwd ? [...pairs].sort((a,b)=>b.lcg - a.lcg) : [...pairs].sort((a,b)=>a.lcg - b.lcg);
+        const orderDon = wantFwd ? [...pairs].sort((a,b)=>a.lcg - b.lcg) : [...pairs].sort((a,b)=>b.lcg - a.lcg);
+        for (const pf of orderRecv) {
+          for (const pa of orderDon) {
+            if (pf.idx === pa.idx) continue;
+            const limPf = lim.get(pf.P); const limSf = lim.get(pf.S);
+            const limPa = lim.get(pa.P); const limSa = lim.get(pa.S);
+            const vPf = vol.get(pf.P)||0, vSf = vol.get(pf.S)||0;
+            const vPa = vol.get(pa.P)||0, vSa = vol.get(pa.S)||0;
+            const addCap = Math.min((limPf.max - vPf), (limSf.max - vSf));
+            const redCap = Math.min((vPa - limPa.min), (vSa - limSa.min));
+            const delta = Math.min(addCap, redCap, step);
+            if (delta <= eps) continue;
+            vol.set(pf.P, vPf + delta); vol.set(pf.S, vSf + delta);
+            vol.set(pa.P, vPa - delta); vol.set(pa.S, vSa - delta);
+            const newTrim = evalTrim();
+            if (newTrim != null && Math.abs(newTrim) + 1e-5 < Math.abs(trim)) {
+              trim = newTrim; changed = true; improved = true; didOne = true; break;
+            } else {
+              vol.set(pf.P, vPf); vol.set(pf.S, vSf);
+              vol.set(pa.P, vPa); vol.set(pa.S, vSa);
+            }
           }
+          if (didOne) break;
         }
         if (!didOne) break;
       }
