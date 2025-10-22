@@ -848,7 +848,16 @@ function renderSummaryAndSvg(result) {
       for (const a of allocations || []) loaded += (a.weight_mt || 0);
       if (requested > 0 && loaded + 0.1 < requested) {
         const diff = requested - loaded;
-        html = `<div style="color:#ef4444; font-weight:600;">Requested cargo ${requested.toFixed(1)} t; loaded ${loaded.toFixed(1)} t — short by ${diff.toFixed(1)} t.</div>` + html;
+        const byDraft = (() => {
+          try {
+            const hasFR = Array.isArray(parcels) && parcels.some(p=>!!p.fill_remaining);
+            return hasFR && Number.isFinite(LAST_MAX_CARGO_MT) && LAST_MAX_CARGO_MT > 0;
+          } catch { return false; }
+        })();
+        const prefix = (selectedVariantKey === 'engine_all_max' || byDraft)
+          ? `Requested by draft ${requested.toFixed(1)} t; loaded max available ${loaded.toFixed(1)} t`
+          : `Requested cargo ${requested.toFixed(1)} t; loaded ${loaded.toFixed(1)} t`;
+        html = `<div style="color:#ef4444; font-weight:600;">${prefix} — short by ${diff.toFixed(1)} t.</div>` + html;
       }
       warnsEl.innerHTML = html;
     }
@@ -1442,9 +1451,17 @@ function fillVariantSelect() {
 function computeAndRender() {
   variantsCache = computeVariants();
   fillVariantSelect();
-  const chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'];
-  const res = chosen?.res || computePlan(tanks, parcels);
+  let chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'];
+  let res = chosen?.res || computePlan(tanks, parcels);
   currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+  // Fallback: if chosen is infeasible/null and All Max exists, auto-select All Max (short)
+  if (!currentPlanResult && variantsCache && variantsCache['engine_all_max']) {
+    selectedVariantKey = 'engine_all_max';
+    if (variantSelect) variantSelect.value = 'engine_all_max';
+    chosen = variantsCache['engine_all_max'];
+    res = chosen?.res;
+    currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+  }
   persistLastState();
   renderSummaryAndSvg(currentPlanResult);
 }
