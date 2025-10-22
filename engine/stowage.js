@@ -861,6 +861,31 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     const freePairsAll = getFreePairs();
     const freeCentersList = centers.filter(c => !usedCenters.has(c.id));
     if (Number.isFinite(Vrem)) {
+      // If requested remaining volume exceeds total available capacity, fill all available (short load)
+      let capSumAll = 0;
+      for (const idx of freePairsAll) {
+        const pr = pairs[idx];
+        capSumAll += pr.port.volume_m3 * pr.port.max_pct + pr.starboard.volume_m3 * pr.starboard.max_pct;
+      }
+      for (const c of freeCentersList) capSumAll += c.volume_m3 * c.max_pct;
+      if (Vrem > capSumAll + 1e-9) {
+        // Fill centers at max first, then all pairs at max
+        const reserved = [];
+        for (const c of freeCentersList) {
+          addAllocation(c, remaining, c.volume_m3 * c.max_pct);
+          usedCenters.add(c.id);
+          reserved.push(c.id);
+        }
+        for (const idx of freePairsAll) {
+          const pr = pairs[idx];
+          addAllocation(pr.port, remaining, pr.port.volume_m3 * pr.port.max_pct);
+          addAllocation(pr.starboard, remaining, pr.starboard.volume_m3 * pr.starboard.max_pct);
+          usedPairs.add(idx);
+          reserved.push(`COT${idx}P/S`);
+        }
+        warnings.push(`${remaining.name || remaining.id}: requested ${Vrem.toFixed(1)} m³ exceeds available capacity ${capSumAll.toFixed(1)} m³ — filled all available (short loading).`);
+        reasoning_trace.push({ parcel_id: remaining.id, V: Vrem, Cmin: CminRef, Cmax: CmaxRef, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: reserved, reason: 'FR over-capacity: filled all available (short)' });
+      } else {
       // Treat FR like a fixed parcel: select subset and water-fill to exactly Vrem
       const isSmallParcel = Vrem > 0 && Vrem <= bufferSmallThreshold;
       const freePairsNoBuffer = freePairsAll.filter(idx => !bufferPairs.has(idx));
@@ -955,6 +980,7 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
           }
           reasoning_trace.push(traceEntry);
         }
+      }
       }
     } else {
       // No specific target: fill all free capacity to max
