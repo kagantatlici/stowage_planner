@@ -488,6 +488,55 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
   const preferWingEvenIfCenter = !!policy.preferWingEvenIfCenter;
   const hardReserveSlopsSmall = !!policy.hardReserveSlopsSmall;
 
+  // --- Early fallback: fixed over-capacity (no FR) → fill all available capacity and mark short loading
+  try {
+    const fixedOnly = parcels.filter(p => !p.fill_remaining);
+    const hasFR = parcels.some(p => !!p.fill_remaining);
+    if (!hasFR && fixedOnly.length === 1) {
+      const p0 = fixedOnly[0];
+      const Vreq = Number(p0.total_m3) || 0;
+      const capMaxAll = included.reduce((s,t)=> s + (t.volume_m3 * (t.max_pct||0)), 0);
+      if (Vreq > capMaxAll + 1e-9) {
+        // Allocate every included tank at max%
+        for (const t of included) {
+          const vmax = t.volume_m3 * (t.max_pct || 0);
+          if (vmax > 0) addAllocation(t, p0, vmax);
+        }
+        warnings.push(`${p0.name || p0.id}: requested ${Vreq.toFixed(1)} m³ exceeds available capacity ${capMaxAll.toFixed(1)} m³ — filled all available (short loading).`);
+        // Diagnostics: weights and balance
+        let port_weight_mt = 0; let starboard_weight_mt = 0;
+        for (const a of allocations) {
+          const tank = included.find(t => t.id === a.tank_id);
+          if (!tank) continue;
+          if (tank.side === 'port') port_weight_mt += a.weight_mt;
+          if (tank.side === 'starboard') starboard_weight_mt += a.weight_mt;
+        }
+        // Validate per-tank min/max and record warnings
+        for (const a of allocations) {
+          const tank = included.find(t => t.id === a.tank_id);
+          if (!tank) continue;
+          const minV = tank.volume_m3 * tank.min_pct - 1e-6;
+          const maxV = tank.volume_m3 * tank.max_pct + 1e-6;
+          if (a.assigned_m3 < minV) warnings.push(`Tank ${a.tank_id}: below min (${a.assigned_m3.toFixed(1)} < ${(tank.volume_m3*tank.min_pct).toFixed(1)})`);
+          if (a.assigned_m3 > maxV) warnings.push(`Tank ${a.tank_id}: above max (${a.assigned_m3.toFixed(1)} > ${(tank.volume_m3*tank.max_pct).toFixed(1)})`);
+        }
+        const denom = port_weight_mt + starboard_weight_mt;
+        const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
+        const balance_status = imbalance_pct <= 10 ? 'Balanced' : 'Warning';
+        const diagnostics = {
+          port_weight_mt,
+          starboard_weight_mt,
+          balance_status,
+          imbalance_pct,
+          reasoning_trace: [{ parcel_id: p0.id, V: Vreq, Cmin: CminRef, Cmax: CmaxRef, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: ['ALL@MAX'], reason: 'fixed over-capacity: filled all available (short)' }],
+          warnings,
+          errors
+        };
+        return { allocations, diagnostics };
+      }
+    }
+  } catch {}
+
   // Identify SLOP pair index and capacity (synthetic pair index 1000)
   const slopIdx = 1000;
   const hasSlops = !!(pairs[slopIdx] && pairs[slopIdx].port && pairs[slopIdx].starboard);
