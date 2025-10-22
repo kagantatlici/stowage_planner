@@ -2209,6 +2209,13 @@ try {
     .forEach(el => el.addEventListener('input', updateMaxCargoView));
 } catch {}
 try { if (rsEnableEl) rsEnableEl.addEventListener('change', updateMaxCargoView); } catch {}
+// Recompute hydro summary when RS inputs change (draft/trim reflect FO/FW/OTH/CONST/ρ)
+try {
+  const reHydro = () => { try { renderSummaryAndSvg(currentPlanResult); } catch {} };
+  [rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
+    .filter(Boolean)
+    .forEach(el => el.addEventListener('input', reHydro));
+} catch {}
 try { updateMaxCargoView(); } catch {}
 
 function interpHydro(rows, T) {
@@ -2278,8 +2285,18 @@ function computeHydroForAllocations(allocations) {
       return { LCF: lerp(a.lcf_m,b.lcf_m), LCB: lerp(a.lcb_m,b.lcb_m), TPC: lerp(a.tpc,b.tpc), MCT1cm: lerp(a.mct,b.mct), DIS_FW };
     } catch { return null; }
   }
-  // Build items
-  const fo = 0, fw = 0, oth = 0, constW = 0, constX = null;
+  // Build items (include consumables and constant from Cargo Input)
+  let fo = 0, fw = 0, oth = 0, constW = 0, constX = null;
+  try {
+    const rs = getRSInputs ? getRSInputs() : null;
+    if (rs) {
+      if (isFinite(rs.fo)) fo = Number(rs.fo) || 0;
+      if (isFinite(rs.fw)) fw = Number(rs.fw) || 0;
+      if (isFinite(rs.oth)) oth = Number(rs.oth) || 0;
+      if (isFinite(rs.constW)) constW = Number(rs.constW) || 0;
+      if (isFinite(rs.constX)) constX = Number(rs.constX);
+    }
+  } catch {}
   let W = 0, Mx = 0;
   const LCG_BIAS = getLCGBias();
   // cargo allocations
@@ -2307,7 +2324,10 @@ function computeHydroForAllocations(allocations) {
     Mx += consW * SHIP_PARAMS.LCG_FO_FW;
   }
   // constant
-  if (constW && isFinite(constX)) { W += constW; Mx += constW * constX; }
+  if (constW) {
+    W += constW;
+    if (isFinite(constX)) Mx += constW * constX;
+  }
   // lightship
   if (isFinite(LIGHT_SHIP.weight_mt)) {
     W += LIGHT_SHIP.weight_mt; if (isFinite(LIGHT_SHIP.lcg)) Mx += LIGHT_SHIP.weight_mt * LIGHT_SHIP.lcg;
@@ -2315,7 +2335,9 @@ function computeHydroForAllocations(allocations) {
   if (!(W > 0)) return null;
   const LCG = Mx / W;
   const rowsUse = HYDRO_ROWS;
-  const rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
+  // Use user-provided water density if available; else fall back to ship's ref density
+  let rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
+  try { const rs = getRSInputs ? getRSInputs() : null; if (rs && isFinite(rs.rho) && rs.rho > 0) rho_ref = Number(rs.rho); } catch {}
   const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
   const Hship = computeHydroShip(rowsUse, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
