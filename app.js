@@ -642,7 +642,7 @@ function renderParcelEditor() {
       <td><input type="number" step="0.001" min="0" value="${p.total_m3 != null ? Number(p.total_m3).toFixed(3) : ''}" data-idx="${idx}" data-field="total_m3" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
       <td><input type="number" step="0.1" min="0" value="${wt!=='' ? Number(wt).toFixed(1) : ''}" data-idx="${idx}" data-field="weight_mt" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
       <td><input type="checkbox" ${p.fill_remaining?'checked':''} data-idx="${idx}" data-field="fill_remaining" /></td>
-      <td><input type="number" step="0.001" min="0" value="${((p.density_kg_m3||0)/1000).toFixed(3)}" data-idx="${idx}" data-field="density_g_cm3" style="width:80px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${((p.density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="density_g_cm3" style="width:90px"/></td>
       <td><input type="number" step="1" value="${p.temperature_c}" data-idx="${idx}" data-field="temperature_c" style="width:70px"/></td>
       <td><input type="color" value="${p.color || '#888888'}" data-idx="${idx}" data-field="color"/></td>
       <td class="row-controls"><button data-act="del-parcel" data-idx="${idx}">Delete</button></td>
@@ -1279,6 +1279,16 @@ function computeVariants() {
   })();
   // Helper: compute loaded cargo weight from allocations (t)
   const loadedTons = (res) => (res?.allocations || []).reduce((s,a)=>s + (Number(a?.weight_mt)||0), 0);
+  // Build All-Max (fill all capacity) variant via synthetic FR plan
+  let vAllMax = null;
+  try {
+    if ((parcels||[]).length > 0) {
+      const p0 = parcels[0];
+      const frParcels = [{ ...p0, total_m3: undefined, fill_remaining: true }];
+      vAllMax = computePlan(tanks, frParcels);
+      if (!vAllMax || !Array.isArray(vAllMax.allocations) || (vAllMax?.diagnostics?.errors||[]).length) vAllMax = null;
+    }
+  } catch {}
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
   let vMinTrimAlts = [];
@@ -1371,6 +1381,7 @@ function computeVariants() {
     engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
     engine_even_keel: vEvenKeel ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeel } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
+    engine_all_max: (vAllMax && requestedTons > 0 && (loadedTons(vAllMax) + 0.1 < requestedTons)) ? { id: 'Engine — All Max (short)', res: vAllMax } : undefined,
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
       `engine_alt_${i+1}`,
