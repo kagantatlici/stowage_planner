@@ -1281,6 +1281,7 @@ function computeVariants() {
   const loadedTons = (res) => (res?.allocations || []).reduce((s,a)=>s + (Number(a?.weight_mt)||0), 0);
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
+  let vMinTrimAlts = [];
   try {
     const cands = [];
     if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
@@ -1288,24 +1289,28 @@ function computeVariants() {
     // Filter infeasible for our spec: underfill band used or under-loaded vs requested (>0)
     const tol = 0.1; // tons
     const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors||[]).length);
-    let best = null;
+    // Intra-selection trim optimization: try improving each feasible candidate without changing k or band
+    const improved = [];
     for (const r of feasible) {
-      const metrics = computeHydroForAllocations((r.allocations||[]));
-      if (!metrics || !isFinite(metrics.Trim)) continue; // need hydro for trim
-      const score = Math.abs(metrics.Trim);
-      // tie-breakers: lower P/S imbalance, higher empty tank count
-      const imb = Number(r?.diagnostics?.imbalance_pct) || 0;
-      // empty tanks: included - used
-      const usedTankIds = new Set((r.allocations||[]).map(a => a.tank_id));
-      const emptyCount = (tanks.filter(t=>t.included).length) - usedTankIds.size;
-      const key = { score, imb, empty: -emptyCount }; // empty negated to prefer larger
-      if (!best) best = { r, key };
-      else {
-        const a = best.key, b = key;
-        if (b.score < a.score || (b.score === a.score && (b.imb < a.imb || (b.imb === a.imb && b.empty < a.empty)))) best = { r, key };
+      const opt = optimizeTrimWithinSelection(r);
+      const resUse = opt || r;
+      const met = computeHydroForAllocations(resUse.allocations||[]);
+      if (!met || !isFinite(met.Trim)) continue;
+      improved.push({ res: resUse, trim: Math.abs(met.Trim) });
+    }
+    improved.sort((a,b)=> a.trim - b.trim);
+    if (improved.length) {
+      vMinTrim = improved[0].res;
+      // keep a couple of unique alternatives if any remain
+      const seen = new Set();
+      const sig = (res) => (res.allocations||[]).map(a=>`${a.tank_id}:${a.assigned_m3.toFixed(3)}`).sort().join('|');
+      const bestSig = sig(vMinTrim);
+      seen.add(bestSig);
+      for (let i=1;i<improved.length && vMinTrimAlts.length<2;i++) {
+        const s = sig(improved[i].res);
+        if (!seen.has(s)) { seen.add(s); vMinTrimAlts.push(improved[i].res); }
       }
     }
-    vMinTrim = best ? best.r : null;
   } catch {}
 
   function planSig(res) {
@@ -1338,6 +1343,8 @@ function computeVariants() {
   const candidates = {
     engine_min_k: { id: 'Engine — Max Empty Tanks', res: vMin },
     engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
+    engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
+    engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
@@ -1351,7 +1358,7 @@ function computeVariants() {
 
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1372,7 +1379,7 @@ function computeVariants() {
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1937,6 +1944,128 @@ window.stowageEngine = { computePlanMaxRemaining, computePlanMinTanksAggressive 
 
 // ---- Max Cargo (from target draft) ----
 let LAST_MAX_CARGO_MT = null;
+
+// ---- Min-Trim optimizer (intra-selection; no band; min/max respected) ----
+function optimizeTrimWithinSelection(baseRes) {
+  try {
+    if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
+    // Single fixed parcel only (keep scope tight)
+    const parcelIds = Array.from(new Set(baseRes.allocations.map(a=>a.parcel_id)));
+    if (parcelIds.length !== 1) return null;
+    const pid = parcelIds[0];
+    // Map tank limits
+    const tankById = new Map(tanks.map(t => [t.id, t]));
+    const lim = new Map();
+    for (const a of baseRes.allocations) {
+      const t = tankById.get(a.tank_id); if (!t) return null;
+      lim.set(a.tank_id, { min: t.volume_m3 * t.min_pct, max: t.volume_m3 * t.max_pct });
+    }
+    // Build per-tank volumes (only selected tanks)
+    const vol = new Map();
+    let totalV = 0;
+    for (const a of baseRes.allocations) { vol.set(a.tank_id, Number(a.assigned_m3)||0); totalV += Number(a.assigned_m3)||0; }
+    // Group used pairs
+    const usedPairs = new Map(); // idx -> {P,S,lcg}
+    for (const a of baseRes.allocations) {
+      const id = a.tank_id; const idx = cotPairIndex(id);
+      if (idx == null) continue;
+      const ent = usedPairs.get(idx) || { P:null, S:null, lcg:0 };
+      if (/P$/.test(id)) ent.P = id; else if (/S$/.test(id)) ent.S = id;
+      usedPairs.set(idx, ent);
+    }
+    // Only pairs with both sides; center tanks ignored
+    const pairs = [];
+    const cotIdxs = Array.from(usedPairs.keys()).filter(i=>i<1000);
+    const minCot = cotIdxs.length ? Math.min(...cotIdxs) : 0;
+    const maxCot = cotIdxs.length ? Math.max(...cotIdxs) : 0;
+    const norm = (i) => (i >= 1000 ? maxCot + 1 : i);
+    for (const [idx, ent] of usedPairs.entries()) {
+      if (idx >= 1000) continue; // skip slops
+      if (!ent.P || !ent.S) continue;
+      let xP = TANK_LCG_MAP.has(ent.P) ? Number(TANK_LCG_MAP.get(ent.P)) : null;
+      let xS = TANK_LCG_MAP.has(ent.S) ? Number(TANK_LCG_MAP.get(ent.S)) : null;
+      let lcg = null;
+      if (isFinite(xP) && isFinite(xS)) lcg = (xP + xS) / 2;
+      else lcg = norm(idx);
+      pairs.push({ idx, P: ent.P, S: ent.S, lcg });
+    }
+    if (!pairs.length) return null;
+    pairs.sort((a,b)=>a.lcg - b.lcg); // aft..fwd
+
+    // Helper: compute trim
+    const makeAllocs = () => {
+      const out = [];
+      for (const [tid, v] of vol.entries()) {
+        const t = tankById.get(tid); if (!t) continue;
+        const parcel = pid;
+        const w = (v * ((parcels.find(p=>p.id===pid)?.density_kg_m3)||0)) / 1000.0;
+        out.push({ tank_id: tid, parcel_id: parcel, assigned_m3: v, fill_pct: v / t.volume_m3, weight_mt: w });
+      }
+      return out;
+    };
+    const evalTrim = () => {
+      const met = computeHydroForAllocations(makeAllocs());
+      if (!met || !isFinite(met.Trim)) return null;
+      return met.Trim;
+    };
+    let trim = evalTrim();
+    if (trim == null) return null;
+    const eps = 1e-6;
+    const steps = [200, 100, 50, 25, 10]; // m3 per side
+    let improved = false;
+    for (const step of steps) {
+      let changed = true; let guard = 0;
+      while (changed && guard++ < 200) {
+        changed = false;
+        const wantFwd = trim > 0; // +stern → move fwd
+        const fwdOrder = wantFwd ? [...pairs].sort((a,b)=>b.lcg - a.lcg) : [...pairs].sort((a,b)=>a.lcg - b.lcg);
+        const aftOrder = wantFwd ? [...pairs].sort((a,b)=>a.lcg - b.lcg) : [...pairs].sort((a,b)=>b.lcg - a.lcg);
+        let didOne = false;
+        for (let i=0; i<Math.min(fwdOrder.length, aftOrder.length); i++) {
+          const pf = fwdOrder[i];
+          const pa = aftOrder[i];
+          if (pf.idx === pa.idx) continue;
+          const limPf = lim.get(pf.P); const limSf = lim.get(pf.S);
+          const limPa = lim.get(pa.P); const limSa = lim.get(pa.S);
+          const vPf = vol.get(pf.P)||0, vSf = vol.get(pf.S)||0;
+          const vPa = vol.get(pa.P)||0, vSa = vol.get(pa.S)||0;
+          const addCap = Math.min((limPf.max - vPf), (limSf.max - vSf));
+          const redCap = Math.min((vPa - limPa.min), (vSa - limSa.min));
+          const delta = Math.min(addCap, redCap, step);
+          if (delta <= eps) continue;
+          // apply tentative move: +delta on forward pair (both sides), -delta on aft pair
+          vol.set(pf.P, vPf + delta); vol.set(pf.S, vSf + delta);
+          vol.set(pa.P, vPa - delta); vol.set(pa.S, vSa - delta);
+          const newTrim = evalTrim();
+          if (newTrim != null && Math.abs(newTrim) + 1e-5 < Math.abs(trim)) {
+            trim = newTrim; changed = true; improved = true; didOne = true; break;
+          } else {
+            // revert
+            vol.set(pf.P, vPf); vol.set(pf.S, vSf);
+            vol.set(pa.P, vPa); vol.set(pa.S, vSa);
+          }
+        }
+        if (!didOne) break;
+      }
+    }
+    if (!improved) return null;
+    // Build result object similar to engine output
+    const allocations = makeAllocs();
+    // Diagnostics (port/starboard)
+    let port_weight_mt = 0, starboard_weight_mt = 0;
+    allocations.forEach(a => {
+      const t = tankById.get(a.tank_id);
+      if (!t) return;
+      if (t.side === 'port') port_weight_mt += (a.weight_mt||0);
+      if (t.side === 'starboard') starboard_weight_mt += (a.weight_mt||0);
+    });
+    const denom = port_weight_mt + starboard_weight_mt;
+    const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
+    const balance_status = imbalance_pct <= 10 ? 'Balanced' : 'Warning';
+    const diagnostics = { port_weight_mt, starboard_weight_mt, balance_status, imbalance_pct, reasoning_trace: [{ parcel_id: pid, V: totalV, Cmin: 0, Cmax: 0, k_low: 0, k_high: 0, chosen_k: baseRes?.diagnostics?.reasoning_trace?.[0]?.chosen_k || 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: [], reason: 'min-trim optimized (intra-selection, no band)' }], warnings: [], errors: [] };
+    return { allocations, diagnostics };
+  } catch { return null; }
+}
 
 // Toggle handling for Target Draft input
 function applyDraftToggleUI() {
