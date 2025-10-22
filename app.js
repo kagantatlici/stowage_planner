@@ -120,13 +120,14 @@ const APP_BUILD = (() => {
     const cb = qs.get('cb') || null;
     return {
       app: 'stowage_planner',
-      build_tag: 'simple-hydro-summary',
+      build_tag: 'min-trim-v1',
       cb,
       loaded_at: new Date().toISOString(),
       features: {
         dynamic_import: true,
         simple_hydro_summary: true,
-        hydro_interp_safe: true
+        hydro_interp_safe: true,
+        min_trim_selector: true
       }
     };
   } catch (_) {
@@ -1255,7 +1256,7 @@ function computeVariants() {
   const vAgg = computePlanMinTanksAggressive(tanks, parcels);
   const vWing = computePlanSingleWingAlternative(tanks, parcels);
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
-  const altList = computePlanMinKAlternatives(tanks, parcels, 5) || [];
+  const altList = computePlanMinKAlternatives(tanks, parcels, 50) || [];
 
   // Helper: detect band underfill usage in diagnostics (disallowed for Min Trim variant)
   const usedBand = (res) => {
