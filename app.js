@@ -1384,6 +1384,7 @@ function computeVariants() {
   let vMinTrimAlts = [];
   let vEvenKeel = null;
   let vEvenKeelUse = null;
+  let vMinTrimBallast = null;
   try {
     const cands = [];
     if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
@@ -1438,6 +1439,15 @@ function computeVariants() {
     } catch {}
   } catch {}
 
+  // Ballast optimization on top of min-trim cargo plan
+  try {
+    const baseForBallast = vMinTrim || vMin;
+    if (baseForBallast && Array.isArray(baseForBallast.allocations)) {
+      const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: 1.025, improveThreshold: 0.05 });
+      if (bal && Array.isArray(bal.ballastAllocations) && bal.ballastAllocations.length) vMinTrimBallast = bal;
+    }
+  } catch {}
+
   // Only keep Even Keel if it meaningfully improves Trim vs Min Trim (or if Min Trim is absent)
   try {
     if (vEvenKeel && Array.isArray(vEvenKeel.allocations)) {
@@ -1481,6 +1491,7 @@ function computeVariants() {
   const candidates = {
     engine_min_k: { id: 'Engine — Max Empty Tanks', res: vMin },
     engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
+    engine_min_trim_ballast: vMinTrimBallast ? { id: 'Engine — Min Trim (cargo+ballast)', res: vMinTrimBallast } : undefined,
     engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
     engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
     engine_even_keel: vEvenKeelUse ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeelUse } : undefined,
@@ -1498,7 +1509,7 @@ function computeVariants() {
   
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -2231,6 +2242,128 @@ function optimizeTrimWithinSelection(baseRes, opts) {
   } catch { return null; }
 }
 
+// ---- Ballast optimizer (adds seawater; cargo fixed) ----
+function optimizeBallastForTrim(baseRes, opts) {
+  try {
+    const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05 }, opts||{});
+    if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
+    // Helper: ballast meta and grouping
+    const bmeta = loadBallastMeta ? loadBallastMeta() : {};
+    const getSide = (id)=> guessSideFromId(id) || null;
+    const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+    // Build tank map and LCGs
+    const tankLCG = (id)=> {
+      const x0 = TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : NaN;
+      return isFinite(x0) ? x0 : NaN;
+    };
+    // Effective headroom function from meta (min/max, preload)
+    const effBounds = (bt) => {
+      const m = bmeta[bt.id] || {};
+      const cap = Number(bt.cap_m3||0);
+      const minPct = isFinite(m.min_pct) ? m.min_pct : 0;
+      const maxPct = isFinite(m.max_pct) ? m.max_pct : 1;
+      const pre = Number(m.preload_m3||0);
+      const minV = Math.max(0, cap * minPct - pre);
+      const maxV = Math.max(0, cap * maxPct - pre);
+      return { minV, maxV };
+    };
+    // Group ballast tanks by base key
+    const groups = {};
+    (BALLAST_TANKS||[]).forEach(bt => {
+      const m = bmeta[bt.id] || {};
+      const inc = m.included !== false; // default true
+      if (!inc) return; // skip excluded ballast tanks
+      const key = baseKey(bt.id);
+      if (!groups[key]) groups[key] = { P:null, S:null, centers:[], lcg:NaN };
+      const side = getSide(bt.id);
+      if (side === 'port') groups[key].P = bt; else if (side === 'starboard') groups[key].S = bt; else groups[key].centers.push(bt);
+    });
+    // Build candidate list: pairs and centers with headroom and representative LCG
+    const pairs = [];
+    Object.keys(groups).forEach(k => {
+      const g = groups[k];
+      if (g.P && g.S) {
+        // pair
+        const bP = effBounds(g.P), bS = effBounds(g.S);
+        const head = Math.min(bP.maxV, bS.maxV);
+        if (head > 1e-6) {
+          const xP = tankLCG(g.P.id), xS = tankLCG(g.S.id);
+          const lcg = isFinite(xP)&&isFinite(xS) ? (xP+xS)/2 : NaN;
+          pairs.push({ type:'pair', P: g.P, S: g.S, head, lcg });
+        }
+      }
+      // centers
+      (g.centers||[]).forEach(ct => {
+        const bC = effBounds(ct);
+        const head = bC.maxV;
+        if (head > 1e-6) {
+          const lcg = tankLCG(ct.id);
+          pairs.push({ type:'center', C: ct, head, lcg });
+        }
+      });
+    });
+    if (!pairs.length) return null;
+    // Initial hydro and allocations
+    const cargoAllocs = baseRes.allocations.map(a => ({...a}));
+    const ballastAllocs = []; // {tank_id, assigned_m3}
+    const evalTrim = () => {
+      return computeHydroForAllocations([ ...cargoAllocs, ...ballastAllocs.map(b=>({ tank_id:b.tank_id, parcel_id:'BALLAST', assigned_m3:b.assigned_m3, fill_pct:0, weight_mt: b.assigned_m3 * options.rho_t_m3 })) ]);
+    };
+    let met = evalTrim();
+    if (!met || !isFinite(met.Trim)) return null;
+    const startTrim = met.Trim;
+    const steps = [200, 100, 50, 25, 10];
+    const eps=1e-6;
+    for (const step of steps) {
+      let changed=true; let guard=0;
+      while (changed && guard++<200) {
+        changed=false;
+        met = evalTrim();
+        const wantFwd = met.Trim > 0; // +stern → add forward
+        // Order candidates by LCG
+        const recvOrder = [...pairs].sort((a,b)=> (wantFwd ? (b.lcg - a.lcg) : (a.lcg - b.lcg)) );
+        // Try greedy add
+        for (const g of recvOrder) {
+          if (g.type==='pair') {
+            // add step split to P/S
+            const addPerSide = Math.min(g.head, step/2);
+            if (addPerSide <= eps) continue;
+            // tentative apply
+            ballastAllocs.push({ tank_id: g.P.id, assigned_m3: addPerSide });
+            ballastAllocs.push({ tank_id: g.S.id, assigned_m3: addPerSide });
+            const nm = evalTrim();
+            if (nm && Math.abs(nm.Trim)+1e-5 < Math.abs(met.Trim)) {
+              // accept and reduce headroom
+              g.head -= addPerSide;
+              changed=true; break;
+            } else {
+              // revert
+              ballastAllocs.pop(); ballastAllocs.pop();
+            }
+          } else {
+            const add = Math.min(g.head, step);
+            if (add <= eps) continue;
+            ballastAllocs.push({ tank_id: g.C.id, assigned_m3: add });
+            const nm = evalTrim();
+            if (nm && Math.abs(nm.Trim)+1e-5 < Math.abs(met.Trim)) {
+              g.head -= add;
+              changed=true; break;
+            } else {
+              ballastAllocs.pop();
+            }
+          }
+        }
+      }
+    }
+    const final = evalTrim();
+    if (!final || !isFinite(final.Trim)) return null;
+    const improve = Math.abs(startTrim) - Math.abs(final.Trim);
+    if (improve <= options.improveThreshold || ballastAllocs.length === 0) return null;
+    // Build result object: keep cargo allocations
+    const diagnostics = baseRes.diagnostics || {};
+    return { allocations: cargoAllocs, ballastAllocations: ballastAllocs, diagnostics };
+  } catch { return null; }
+}
 // Helper: parse pair index including SLOPs for variant building
 function uiPairIndex(id) {
   try {
