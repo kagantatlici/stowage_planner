@@ -1798,7 +1798,8 @@ async function buildShipDataTransferPayload() {
         fw: 0,
         oth: 0
       },
-      allocations: allocs,
+      // For receivers that only read 'allocations', send combined list here too
+      allocations: allocations_combined.map(a => ({ ...a, is_ballast: a.parcel_id === 'BALLAST' })),
       allocations_with_ballast: allocations_combined,
       ballast_allocations: ballast
     };
@@ -2353,7 +2354,7 @@ function optimizeBallastForTrim(baseRes, opts) {
     let met = evalTrim();
     if (!met || !isFinite(met.Trim)) return null;
     const startTrim = met.Trim;
-    const steps = [200, 100, 50, 25, 10];
+    const steps = [200, 100, 50, 25, 10, 5, 2, 1, 0.5];
     const eps=1e-6;
     // Simple end-first strategy: fill from relevant end one group at a time
     for (const step of steps) {
