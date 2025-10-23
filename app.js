@@ -1767,13 +1767,23 @@ async function buildShipDataTransferPayload() {
         rho
       };
     });
-    const ballast = Array.isArray(res.ballastAllocations) ? res.ballastAllocations.map(b => ({
-      tank_id: b.tank_id,
-      weight_mt: Number(b.weight_mt)||0,
-      assigned_m3: Number(b.assigned_m3)||0,
-      percent: isFinite(b.percent)?Number(b.percent):undefined,
-      rho: 1.025
-    })) : [];
+    const ballast = Array.isArray(res.ballastAllocations) ? res.ballastAllocations.map(b => {
+      const vol = Number(b.assigned_m3)||0;
+      const rho = 1.025;
+      // try compute percent using BALLAST_TANKS cap_m3
+      let pct = undefined;
+      try {
+        const bt = (BALLAST_TANKS||[]).find(t => t.id === b.tank_id);
+        if (bt && isFinite(bt.cap_m3) && bt.cap_m3 > 0) pct = (vol / bt.cap_m3) * 100;
+      } catch {}
+      return {
+        tank_id: b.tank_id,
+        weight_mt: vol * rho,
+        assigned_m3: vol,
+        percent: (isFinite(b.percent)?Number(b.percent):pct),
+        rho
+      };
+    }) : [];
     return {
       type: 'apply_stowage_plan',
       version: 1,
@@ -2351,50 +2361,37 @@ function optimizeBallastForTrim(baseRes, opts) {
     const eps=1e-6;
     // Simple end-first strategy: fill from relevant end one group at a time
     for (const step of steps) {
-      let changed = true; let guard = 0;
-      while (changed && guard++ < 200) {
-        changed = false;
-        met = evalTrim();
-        const wantFwd = met.Trim > 0; // +stern → add forward
-        const frontFirst = [...pairs].filter(p=>isFinite(p.lcg)).sort((a,b)=> b.lcg - a.lcg); // bow to stern
-        const aftFirst = [...pairs].filter(p=>isFinite(p.lcg)).sort((a,b)=> a.lcg - b.lcg);  // stern to bow
-        const order = wantFwd ? frontFirst : aftFirst;
-        // Prefer pairs first, then centers
-        const orderPairs = order.filter(g=>g.type==='pair');
-        const orderCenters = order.filter(g=>g.type==='center');
-        const tryGroups = (arr) => {
-          for (const g of arr) {
-            // inner loop: attempt to fill this group before moving on
-            let inner = 0;
-            while (g.head > eps && inner++ < 100) {
-              met = evalTrim();
-              if (g.type==='pair') {
-                const addPerSide = Math.min(g.head, step/2);
-                if (addPerSide <= eps) break;
-                ballastAllocs.push({ tank_id: g.P.id, assigned_m3: addPerSide });
-                ballastAllocs.push({ tank_id: g.S.id, assigned_m3: addPerSide });
-                const nm = evalTrim();
-                if (nm && Math.abs(nm.Trim)+1e-5 < Math.abs(met.Trim)) {
-                  g.head -= addPerSide;
-                  changed = true;
-                } else { ballastAllocs.pop(); ballastAllocs.pop(); break; }
-              } else {
-                const add = Math.min(g.head, step);
-                if (add <= eps) break;
-                ballastAllocs.push({ tank_id: g.C.id, assigned_m3: add });
-                const nm = evalTrim();
-                if (nm && Math.abs(nm.Trim)+1e-5 < Math.abs(met.Trim)) {
-                  g.head -= add;
-                  changed = true;
-                } else { ballastAllocs.pop(); break; }
-              }
-            }
-            if (changed) return true; // re-evaluate from most-effective end again
+      met = evalTrim();
+      const wantFwd = met.Trim > 0; // +stern → add forward
+      const ordered = [...pairs].filter(p=>isFinite(p.lcg)).sort((a,b)=> (wantFwd ? (b.lcg - a.lcg) : (a.lcg - b.lcg)));
+      const seq = ordered.filter(g=>g.type==='pair').concat( ordered.filter(g=>g.type==='center') );
+      for (const g of seq) {
+        // keep adding to this single group until no improvement or headroom exhausted
+        let improved = true; let inner=0;
+        while (improved && g.head > eps && inner++<200) {
+          const before = evalTrim();
+          if (g.type==='pair') {
+            const addPerSide = Math.min(g.head, step/2);
+            if (addPerSide <= eps) break;
+            ballastAllocs.push({ tank_id: g.P.id, assigned_m3: addPerSide });
+            ballastAllocs.push({ tank_id: g.S.id, assigned_m3: addPerSide });
+            const after = evalTrim();
+            if (after && Math.abs(after.Trim)+1e-5 < Math.abs(before.Trim)) {
+              g.head -= addPerSide;
+            } else { ballastAllocs.pop(); ballastAllocs.pop(); improved=false; }
+          } else {
+            const add = Math.min(g.head, step);
+            if (add <= eps) break;
+            ballastAllocs.push({ tank_id: g.C.id, assigned_m3: add });
+            const after = evalTrim();
+            if (after && Math.abs(after.Trim)+1e-5 < Math.abs(before.Trim)) {
+              g.head -= add;
+            } else { ballastAllocs.pop(); improved=false; }
           }
-          return false;
-        };
-        if (tryGroups(orderPairs)) continue;
-        if (tryGroups(orderCenters)) continue;
+        }
+        // re-check trim; if near zero, stop early
+        const now = evalTrim();
+        if (now && Math.abs(now.Trim) < options.improveThreshold) break;
       }
     }
     const final = evalTrim();
