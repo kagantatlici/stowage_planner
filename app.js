@@ -140,6 +140,9 @@ const APP_BUILD = (() => {
   }
 })();
 
+// DEBUG_BALLAST: temporary debug container (remove after diagnosing)
+let STOWAGE_DEBUG = { ballast: null };
+
 // ---- Evenkeel helper (local) ----
 function cotPairIndex(id) {
   const m = /COT(\d+)/i.exec(String(id||''));
@@ -1443,7 +1446,13 @@ function computeVariants() {
   try {
     const baseForBallast = vMinTrim || vMin;
     if (baseForBallast && Array.isArray(baseForBallast.allocations)) {
-      const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: 1.025, improveThreshold: 0.05 });
+      const dbgBal = { note: 'DEBUG_BALLAST', BALLAST_TANKS_count: (BALLAST_TANKS||[]).length };
+      try {
+        const bm = loadBallastMeta ? loadBallastMeta() : {};
+        dbgBal.ballast_meta_included = Object.values(bm||{}).filter(m => (m && m.included!==false)).length;
+      } catch {}
+      const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: 1.025, improveThreshold: 0.05, debug: dbgBal });
+      STOWAGE_DEBUG.ballast = dbgBal;
       if (bal && Array.isArray(bal.ballastAllocations) && bal.ballastAllocations.length) vMinTrimBallast = bal;
     }
   } catch {}
@@ -2088,7 +2097,7 @@ btnExportJson.addEventListener('click', async (ev) => {
       return;
     }
     if (ev && ev.shiftKey) {
-      const data = { build: APP_BUILD, tanks, parcels, plan: res };
+      const data = { build: APP_BUILD, tanks, parcels, plan: res, debug: (typeof STOWAGE_DEBUG !== 'undefined' ? STOWAGE_DEBUG : null) };
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
       alert('Copied plan JSON to clipboard.');
@@ -2246,6 +2255,7 @@ function optimizeTrimWithinSelection(baseRes, opts) {
 function optimizeBallastForTrim(baseRes, opts) {
   try {
     const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05 }, opts||{});
+    const dbg = options.debug || null; // DEBUG_BALLAST
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     // Helper: ballast meta and grouping
     const bmeta = loadBallastMeta ? loadBallastMeta() : {};
@@ -2305,7 +2315,13 @@ function optimizeBallastForTrim(baseRes, opts) {
         }
       });
     });
-    if (!pairs.length) return null;
+    if (dbg) {
+      dbg.present = true;
+      dbg.pairs = pairs.map(p => p.type==='pair' ? ({ type:'pair', P:p.P.id, S:p.S.id, head: p.head, lcg: p.lcg }) : ({ type:'center', C:p.C.id, head:p.head, lcg:p.lcg }));
+      dbg.pairsCount = pairs.length;
+      dbg.improveThreshold = options.improveThreshold;
+    }
+    if (!pairs.length) { if (dbg) dbg.reason = 'no_pairs'; return null; }
     // Initial hydro and allocations
     const cargoAllocs = baseRes.allocations.map(a => ({...a}));
     const ballastAllocs = []; // {tank_id, assigned_m3}
@@ -2315,6 +2331,7 @@ function optimizeBallastForTrim(baseRes, opts) {
     let met = evalTrim();
     if (!met || !isFinite(met.Trim)) return null;
     const startTrim = met.Trim;
+    if (dbg) dbg.startTrim = startTrim;
     const steps = [200, 100, 50, 25, 10];
     const eps=1e-6;
     for (const step of steps) {
@@ -2361,7 +2378,8 @@ function optimizeBallastForTrim(baseRes, opts) {
     const final = evalTrim();
     if (!final || !isFinite(final.Trim)) return null;
     const improve = Math.abs(startTrim) - Math.abs(final.Trim);
-    if (improve <= options.improveThreshold || ballastAllocs.length === 0) return null;
+    if (dbg) { dbg.finalTrim = final.Trim; dbg.improvement = improve; dbg.allocations = ballastAllocs.slice(); }
+    if (improve <= options.improveThreshold || ballastAllocs.length === 0) { if (dbg) dbg.reason = 'no_improvement_threshold'; return null; }
     // Build result object: keep cargo allocations
     const diagnostics = baseRes.diagnostics || {};
     return { allocations: cargoAllocs, ballastAllocations: ballastAllocs, diagnostics };
