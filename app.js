@@ -1818,7 +1818,12 @@ function postPlanToShipData() {
     const msg = { type: 'apply_stowage_plan', payload };
     let targetOrigin = '*';
     try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-    try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, keys: Object.keys(payload||{}) }; } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
+    try {
+      frame.contentWindow.postMessage(msg, targetOrigin || '*');
+      // Also send raw payload for receivers that listen to the payload directly
+      frame.contentWindow.postMessage(payload, targetOrigin || '*');
+      STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, shapes:['wrapper','raw'], keys: Object.keys(payload||{}) };
+    } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
     setActiveView('shipdata');
   } catch (_) { alert('Transfer failed.'); }
 }
@@ -1833,7 +1838,11 @@ if (btnTransferShipData) {
       const msg = { type: 'apply_stowage_plan', payload };
       let targetOrigin = '*';
       try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-      try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, keys: Object.keys(payload||{}) }; } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
+      try {
+        frame.contentWindow.postMessage(msg, targetOrigin || '*');
+        frame.contentWindow.postMessage(payload, targetOrigin || '*');
+        STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, shapes:['wrapper','raw'], keys: Object.keys(payload||{}) };
+      } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
       setActiveView('shipdata');
     } catch (_) { alert('Transfer failed.'); }
   });
@@ -2366,28 +2375,63 @@ function optimizeBallastForTrim(baseRes, opts) {
       if (!best) break;
       {
         const g = best;
-        // keep adding to this single group until no improvement or headroom exhausted
-        let improved = true; let inner=0;
-        while (improved && g.head > eps && inner++<200) {
-          const before = evalTrim();
-          if (g.type==='pair') {
-            const addPerSide = Math.min(g.head, step/2);
-            if (addPerSide <= eps) break;
+        if (g.type === 'pair') {
+          // Bisection on per-side volume x in [0, g.head]
+          const f = (x) => {
+            const n = evalTrim(); if (!n) return null; const t0 = n.Trim;
+            ballastAllocs.push({ tank_id: g.P.id, assigned_m3: x });
+            ballastAllocs.push({ tank_id: g.S.id, assigned_m3: x });
+            const n2 = evalTrim();
+            ballastAllocs.pop(); ballastAllocs.pop();
+            return n2 ? n2.Trim : t0;
+          };
+          let lo = 0, hi = Math.max(0, g.head);
+          let t0 = evalTrim()?.Trim || 0;
+          let flo = t0, fhi = f(hi);
+          let bestX = 0, bestT = Math.abs(t0);
+          if (fhi != null && Math.abs(fhi) < bestT) { bestT = Math.abs(fhi); bestX = hi; }
+          if (fhi != null && flo * fhi <= 0) {
+            for (let it=0; it<24; it++) {
+              const mid = (lo + hi) / 2;
+              const fm = f(mid);
+              if (fm == null) break;
+              const am = Math.abs(fm);
+              if (am < bestT) { bestT = am; bestX = mid; }
+              if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+              if (am < options.stopEps) break;
+            }
+          }
+          // Apply bestX (per side)
+          const addPerSide = Math.min(bestX, g.head);
+          if (addPerSide > eps) {
             ballastAllocs.push({ tank_id: g.P.id, assigned_m3: addPerSide });
             ballastAllocs.push({ tank_id: g.S.id, assigned_m3: addPerSide });
-            const after = evalTrim();
-            if (after && Math.abs(after.Trim)+1e-5 < Math.abs(before.Trim)) {
-              g.head -= addPerSide;
-            } else { ballastAllocs.pop(); ballastAllocs.pop(); improved=false; }
-          } else {
-            const add = Math.min(g.head, step);
-            if (add <= eps) break;
-            ballastAllocs.push({ tank_id: g.C.id, assigned_m3: add });
-            const after = evalTrim();
-            if (after && Math.abs(after.Trim)+1e-5 < Math.abs(before.Trim)) {
-              g.head -= add;
-            } else { ballastAllocs.pop(); improved=false; }
+            g.head -= addPerSide;
           }
+        } else {
+          // Center: simple bisection on [0, head]
+          const f = (x) => {
+            const n = evalTrim(); if (!n) return null;
+            ballastAllocs.push({ tank_id: g.C.id, assigned_m3: x });
+            const n2 = evalTrim();
+            ballastAllocs.pop();
+            return n2 ? n2.Trim : n.Trim;
+          };
+          let lo=0, hi=Math.max(0,g.head);
+          let t0 = evalTrim()?.Trim || 0;
+          let flo=t0, fhi=f(hi);
+          let bestX=0, bestT=Math.abs(t0);
+          if (fhi!=null && Math.abs(fhi)<bestT){ bestT=Math.abs(fhi); bestX=hi; }
+          if (fhi!=null && flo*fhi<=0) {
+            for (let it=0; it<24; it++){
+              const mid=(lo+hi)/2; const fm=f(mid); if (fm==null) break; const am=Math.abs(fm);
+              if (am<bestT){ bestT=am; bestX=mid; }
+              if (flo*fm<=0){ hi=mid; fhi=fm; } else { lo=mid; flo=fm; }
+              if (am<options.stopEps) break;
+            }
+          }
+          const add = Math.min(bestX, g.head);
+          if (add>eps) { ballastAllocs.push({ tank_id:g.C.id, assigned_m3: add }); g.head -= add; }
         }
         // re-check trim; if near zero, stop early
         const now = evalTrim();
