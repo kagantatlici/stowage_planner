@@ -1784,6 +1784,10 @@ async function buildShipDataTransferPayload() {
         rho
       };
     }) : [];
+    // Also provide a combined allocations list (cargo + ballast as parcel 'BALLAST') for receivers that expect a single list
+    const allocations_combined = allocs.concat(
+      ballast.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', weight_mt: b.weight_mt, assigned_m3: b.assigned_m3, fill_pct: undefined, percent: b.percent, rho: b.rho }))
+    );
     return {
       type: 'apply_stowage_plan',
       version: 1,
@@ -1799,6 +1803,7 @@ async function buildShipDataTransferPayload() {
         oth: 0
       },
       allocations: allocs,
+      allocations_with_ballast: allocations_combined,
       ballast_allocations: ballast
     };
   } catch (_) { return null; }
@@ -2364,8 +2369,11 @@ function optimizeBallastForTrim(baseRes, opts) {
       met = evalTrim();
       const wantFwd = met.Trim > 0; // +stern → add forward
       const ordered = [...pairs].filter(p=>isFinite(p.lcg)).sort((a,b)=> (wantFwd ? (b.lcg - a.lcg) : (a.lcg - b.lcg)));
-      const seq = ordered.filter(g=>g.type==='pair').concat( ordered.filter(g=>g.type==='center') );
-      for (const g of seq) {
+      // Choose only the single best group (pair preferred, else center)
+      const best = ordered.find(g=>g.type==='pair') || ordered.find(g=>g.type==='center');
+      if (!best) break;
+      {
+        const g = best;
         // keep adding to this single group until no improvement or headroom exhausted
         let improved = true; let inner=0;
         while (improved && g.head > eps && inner++<200) {
