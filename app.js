@@ -37,6 +37,7 @@ let parcels = [];
 
 // UI helpers
 const tankEditorEl = document.getElementById('tank-editor');
+const ballastEditorEl = document.getElementById('ballast-editor');
 const parcelEditorEl = document.getElementById('parcel-editor');
 const btnCompute = document.getElementById('btn-compute');
 // Demo load buttons removed from UI
@@ -110,6 +111,8 @@ const LS_PRESETS = 'stowage_presets_v1';
 const LS_LAST = 'stowage_last_v2';
 // Per-preset ship meta (stability/hydro/LCGs) storage
 const LS_SHIP_META = 'stowage_ship_meta_v1';
+// Ballast tank editable metadata (min/max, preload)
+const LS_BALLAST_META = 'stowage_ballast_meta_v1';
 // Optional: config name input persistence (UI clarity)
 const LS_CFG_NAME = 'stowage_cfgname_v1';
 
@@ -304,6 +307,7 @@ function extractCargoArray(profile) {
 function clearImportedShips() {
   try { localStorage.removeItem(LS_PRESETS); } catch {}
   try { localStorage.removeItem(LS_SHIP_META); } catch {}
+  try { localStorage.removeItem(LS_BALLAST_META); } catch {}
   try { localStorage.removeItem(LS_LAST); } catch {}
   SHIP_PARAMS.LBP = null;
   SHIP_PARAMS.RHO_REF = null;
@@ -633,6 +637,53 @@ function renderTankEditor() {
       const idx = Number(btn.getAttribute('data-idx'));
       tanks.splice(idx, 1);
       persistLastState();
+      render();
+    });
+  });
+}
+
+function loadBallastMeta(){ try { return JSON.parse(localStorage.getItem(LS_BALLAST_META)||'{}'); } catch { return {}; } }
+function saveBallastMeta(m){ try { localStorage.setItem(LS_BALLAST_META, JSON.stringify(m||{})); } catch {} }
+
+function renderBallastEditor() {
+  if (!ballastEditorEl) return;
+  const meta = loadBallastMeta();
+  const rows = (BALLAST_TANKS||[]).map((bt, idx) => {
+    const m = meta[bt.id] || {};
+    const minPct = Math.round(((m.min_pct ?? 0) * 100));
+    const maxPct = Math.round(((m.max_pct ?? 1) * 100));
+    const preload = Number(m.preload_m3 || 0);
+    const rho = ((m.preload_density_kg_m3 || 1025) / 1000).toFixed(4);
+    const included = (m.included ?? true);
+    return `<tr>
+      <td>${bt.id}</td>
+      <td>${guessSideFromId(bt.id) || '-'}</td>
+      <td style="text-align:right;">${Number(bt.cap_m3||0)}</td>
+      <td><input type="number" step="1" min="0" max="100" value="${minPct}" data-id="${bt.id}" data-field="min_pct_pct" style="width:60px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${maxPct}" data-id="${bt.id}" data-field="max_pct_pct" style="width:60px"/></td>
+      <td><input type="checkbox" ${included?'checked':''} data-id="${bt.id}" data-field="included"/></td>
+      <td><input type="number" step="0.1" min="0" value="${preload}" data-id="${bt.id}" data-field="preload_m3" style="width:80px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${rho}" data-id="${bt.id}" data-field="preload_rho_gcm3" style="width:80px"/></td>
+    </tr>`;
+  }).join('');
+  ballastEditorEl.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>Tank ID</th><th>Side</th><th>Cap (m³)</th><th>Min %</th><th>Max %</th><th>Incl.</th><th>Preload (m³)</th><th>ρ preload</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  ballastEditorEl.querySelectorAll('input').forEach(el => {
+    el.addEventListener('change', () => {
+      const id = el.getAttribute('data-id'); const field = el.getAttribute('data-field');
+      const was = loadBallastMeta(); const rec = Object.assign({ min_pct:0, max_pct:1, included:true, preload_m3:0, preload_density_kg_m3:1025 }, was[id]||{});
+      if (field === 'included') rec.included = el.checked;
+      else if (field === 'min_pct_pct') rec.min_pct = Math.max(0, Math.min(100, Number(el.value)||0))/100;
+      else if (field === 'max_pct_pct') rec.max_pct = Math.max(0, Math.min(100, Number(el.value)||0))/100;
+      else if (field === 'preload_m3') rec.preload_m3 = Math.max(0, Number(String(el.value).replace(',', '.'))||0);
+      else if (field === 'preload_rho_gcm3') { const g=Number(String(el.value).replace(',', '.')); rec.preload_density_kg_m3 = isNaN(g)? rec.preload_density_kg_m3 : g*1000; }
+      was[id] = rec; saveBallastMeta(was);
       render();
     });
   });
@@ -1527,6 +1578,7 @@ function ensureUniqueParcelIDs() {
 
 function render() {
   renderTankEditor();
+  renderBallastEditor();
   renderParcelEditor();
   // Live layout preview based on current tank config
   renderSummaryAndSvg(null);
@@ -2279,6 +2331,8 @@ function updateMaxCargoView() {
         const v = Number(t?.preload_m3)||0; const r = Number(t?.preload_density_kg_m3)||0;
         if (v>0 && r>0) preW += (v*r)/1000.0;
       }
+      const bmeta = loadBallastMeta ? loadBallastMeta() : {};
+      Object.keys(bmeta||{}).forEach(id => { const m=bmeta[id]||{}; const v=Number(m.preload_m3)||0; const r=Number(m.preload_density_kg_m3)||0; if (v>0&&r>0) preW += (v*r)/1000.0; });
     } catch {}
     const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0) + preW;
     const cargoMax = Math.max(0, W_dis - others);
@@ -2409,6 +2463,12 @@ function computeHydroForAllocations(allocations) {
         W += w; Mx += w * (isFinite(x) ? x : 0);
       }
     }
+    // ballast preloads (from editor meta)
+    const bmeta = loadBallastMeta ? loadBallastMeta() : {};
+    Object.keys(bmeta||{}).forEach(id => {
+      const m = bmeta[id]||{}; const v=Number(m.preload_m3)||0; const r=Number(m.preload_density_kg_m3)||0;
+      if (v>0 && r>0){ const w=(v*r)/1000.0; const x0 = TANK_LCG_MAP.has(id)?Number(TANK_LCG_MAP.get(id)):0; const x = isFinite(x0)?(x0+LCG_BIAS):LCG_BIAS; W+=w; Mx+= w * (isFinite(x)?x:0); }
+    });
   } catch {}
   // consumables — use per-type LCGs when available; else fallback to average
   const cons = {

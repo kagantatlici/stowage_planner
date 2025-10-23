@@ -24,26 +24,42 @@
     <main class="container">
       <section id="view-config" class="panel view">
         <h2>Tank Editor</h2>
-        <div id="active-ship" class="summary-bar" style="margin-bottom:8px; display:none;"></div>
-        <div id="tank-editor"></div>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+        <!-- Controls moved to top -->
+        <div style="display:flex; gap:8px; align-items:center; margin:6px 0 8px; flex-wrap:wrap;">
           <button id="btn-add-center">Add Center Tank</button>
           <button id="btn-import-ship">Import Ship</button>
           <button id="btn-clear-ships">Clear Imported Ships</button>
           <input type="file" id="file-import-ship" accept="application/json" style="display:none;" />
         </div>
-        <div style="margin-top:10px; border-top:1px solid #1b254a; padding-top:10px;">
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <strong style="font-size:13px; color:#9aa3b2;">Ship Configs</strong>
-            <input id="cfg-name" placeholder="e.g. Ship No. 1" style="min-width:180px;" />
-            <button id="btn-save-cfg">Save Config</button>
-            <select id="cfg-select" style="min-width:180px;"></select>
-            <button id="btn-load-cfg">Load</button>
-            <button id="btn-export-cfg">Export Config</button>
-            <button id="btn-del-cfg">Delete</button>
-            <input type="file" id="file-import-cfg" accept="application/json" style="display:none;" />
+        <div style="margin:6px 0 10px; border-top:1px solid #1b254a; padding-top:10px;">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:8px; align-items:center;">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <strong style="font-size:13px; color:#9aa3b2;">Ship Configs</strong>
+              <input id="cfg-name" placeholder="e.g. Ship No. 1" style="min-width:180px;" />
+              <button id="btn-save-cfg">Save Config</button>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <select id="cfg-select" style="min-width:180px;"></select>
+              <button id="btn-load-cfg">Load</button>
+              <button id="btn-export-cfg">Export Config</button>
+              <button id="btn-del-cfg">Delete</button>
+              <input type="file" id="file-import-cfg" accept="application/json" style="display:none;" />
+            </div>
           </div>
         </div>
+        <!-- Cargo and Ballast editors side-by-side -->
+        <div class="config-grid" style="display:grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap:12px; align-items:start;">
+          <div>
+            <h3 style="margin:4px 0 6px; font-size:14px;">Cargo Tanks</h3>
+            <div id="tank-editor"></div>
+          </div>
+          <div>
+            <h3 style="margin:4px 0 6px; font-size:14px;">Ballast Tanks</h3>
+            <div id="ballast-editor"></div>
+          </div>
+        </div>
+        <!-- Active ship info moved to bottom -->
+        <div id="active-ship" class="summary-bar" style="margin-top:10px; display:none;"></div>
       </section>
       <section id="view-cargo" class="panel view active">
         <h2>Cargo Input</h2>
