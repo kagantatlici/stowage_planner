@@ -120,14 +120,16 @@ const APP_BUILD = (() => {
     const cb = qs.get('cb') || null;
     return {
       app: 'stowage_planner',
-      build_tag: 'min-trim-v1',
+      build_tag: 'min-trim-v2',
       cb,
       loaded_at: new Date().toISOString(),
       features: {
         dynamic_import: true,
         simple_hydro_summary: true,
         hydro_interp_safe: true,
-        min_trim_selector: true
+        min_trim_selector: true,
+        even_keel_variant: true,
+        over_capacity_fallbacks: true
       }
     };
   } catch (_) {
@@ -1337,11 +1339,11 @@ function computeVariants() {
       const fixedParcels = parcels.filter(p=>!p.fill_remaining);
       const targetParcel = fixedParcels[0] || parcels[0];
       if (targetParcel) {
-        // Collect all available pair indices
+        // Collect all available pair indices (include SLOPs)
         const pairIdxs = Array.from(new Set(
           (tanks||[])
             .filter(t=>t.included && (t.side==='port'||t.side==='starboard'))
-            .map(t=>cotPairIndex(t.id))
+            .map(t=>uiPairIndex(t.id))
             .filter(i=>i!=null)
         ));
         if (pairIdxs.length) {
@@ -2147,6 +2149,17 @@ function optimizeTrimWithinSelection(baseRes, opts) {
     const diagnostics = { port_weight_mt, starboard_weight_mt, balance_status, imbalance_pct, reasoning_trace: [{ parcel_id: pid, V: totalV, Cmin: 0, Cmax: 0, k_low: 0, k_high: 0, chosen_k: baseRes?.diagnostics?.reasoning_trace?.[0]?.chosen_k || 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: [], reason: 'min-trim optimized (intra-selection, no band)' }], warnings: [], errors: [] };
     return { allocations, diagnostics };
   } catch { return null; }
+}
+
+// Helper: parse pair index including SLOPs for variant building
+function uiPairIndex(id) {
+  try {
+    const s = String(id||'').toUpperCase();
+    const m = /COT(\d+)/.exec(s);
+    if (m) return parseInt(m[1],10);
+    if (s === 'SLOPP' || s === 'SLOPS') return 1000;
+  } catch {}
+  return null;
 }
 
 // Toggle handling for Target Draft input
