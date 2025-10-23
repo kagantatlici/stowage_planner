@@ -2253,7 +2253,10 @@ function optimizeBallastForTrim(baseRes, opts) {
     const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
     // Build tank map and LCGs
     const tankLCG = (id)=> {
-      const x0 = TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : NaN;
+      let x0 = TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : NaN;
+      if (!isFinite(x0)) {
+        try { const bt = (BALLAST_TANKS||[]).find(t=>t.id===id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch {}
+      }
       return isFinite(x0) ? x0 : NaN;
     };
     // Effective headroom function from meta (min/max, preload)
@@ -2577,10 +2580,13 @@ function computeHydroForAllocations(allocations) {
   } catch {}
   let W = 0, Mx = 0;
   const LCG_BIAS = getLCGBias();
-  // cargo allocations
+  // cargo + ballast allocations
   allocations.forEach(a => {
     const w = a.weight_mt || 0;
-    const x0 = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : 0;
+    let x0 = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : NaN;
+    if (!isFinite(x0)) {
+      try { const bt = (BALLAST_TANKS||[]).find(t=>t.id===a.tank_id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch {}
+    }
     const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS;
     W += w;
     Mx += w * (isFinite(x) ? x : 0);
