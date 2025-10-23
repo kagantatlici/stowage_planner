@@ -1564,7 +1564,7 @@ function computeVariants() {
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
