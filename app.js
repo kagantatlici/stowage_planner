@@ -899,8 +899,8 @@ function renderSummaryAndSvg(result) {
   } catch(_) {}
 
   // Larger, card-like ship layout (HTML/CSS)
-  // Respect the order in the tank editor (array order), and place SLOP tanks at the bottom.
-  const includedTanks = tanks.filter(t => t.included);
+  // Respect the order in the tank editor (array order). Show all tanks (incl/excl); mark excluded visually.
+  const includedTanks = tanks.slice();
   /** @type {Record<string, {port:any, starboard:any, centers:any[]}>} */
   const groupMap = {};
   /** @type {string[]} */
@@ -970,6 +970,8 @@ function renderSummaryAndSvg(result) {
           cellP.appendChild(pl);
         }
       } catch {}
+      // Excluded mark
+      try { const tk = tanks.find(t=>t.id===port.id); if (tk && tk.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellP.appendChild(ex);} } catch {}
       if (parcel) cellP.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellP);
     }
@@ -997,6 +999,8 @@ function renderSummaryAndSvg(result) {
             <div class="empty-hint">%</div>
           `}
         `;
+        // Excluded mark
+        try { const tko = tanks.find(t=>t.id===ct.id); if (tko && tko.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellC.appendChild(ex);} } catch {}
         if (a) {
           cellC.style.background = '#0f1a3a';
           if (parcel?.color) cellC.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
@@ -1022,6 +1026,8 @@ function renderSummaryAndSvg(result) {
               <div class="empty-hint">%</div>
             `}
           `;
+          // Excluded mark
+          try { const tko = tanks.find(t=>t.id===ct.id); if (tko && tko.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; block.appendChild(ex);} } catch {}
           if (a) {
             block.style.background = '#0f1a3a';
             if (parcel?.color) block.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
@@ -1050,7 +1056,7 @@ function renderSummaryAndSvg(result) {
           <div class="empty-hint">%</div>
         `}
       `;
-      try { const tk = tanks.find(t=>t.id===star.id); const pv = Number(tk?.preload_m3)||0; if (pv>0){ const pl=document.createElement('div'); pl.className='meta'; pl.textContent=`Preload: ${pv.toFixed(0)} m³`; cellS.appendChild(pl);} } catch {}
+      try { const tk = tanks.find(t=>t.id===star.id); const pv = Number(tk?.preload_m3)||0; if (pv>0){ const pl=document.createElement('div'); pl.className='meta'; pl.textContent=`Preload: ${pv.toFixed(0)} m³`; cellS.appendChild(pl);} if (tk && tk.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellS.appendChild(ex);} } catch {}
       if (parcel) cellS.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellS);
     }
