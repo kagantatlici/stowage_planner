@@ -140,8 +140,6 @@ const APP_BUILD = (() => {
   }
 })();
 
-// DEBUG_TRANSFER: temporary debug container (remove after diagnosing transfer)
-let STOWAGE_TRANSFER_DEBUG = { note: 'DEBUG_TRANSFER', last: null };
 
 // ---- Evenkeel helper (local) ----
 function cotPairIndex(id) {
@@ -1803,8 +1801,6 @@ async function buildShipDataTransferPayload() {
       allocations_with_ballast: allocations_combined,
       ballast_allocations: ballast
     };
-    // DEBUG_TRANSFER: snapshot payload
-    try { STOWAGE_TRANSFER_DEBUG.last = { when: new Date().toISOString(), payload, hasBallast: ballast.length>0, allocs: allocs.length }; } catch {}
     return payload;
   } catch (_) { return null; }
 }
@@ -1822,8 +1818,7 @@ function postPlanToShipData() {
       frame.contentWindow.postMessage(msg, targetOrigin || '*');
       // Also send raw payload for receivers that listen to the payload directly
       frame.contentWindow.postMessage(payload, targetOrigin || '*');
-      STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, shapes:['wrapper','raw'], keys: Object.keys(payload||{}) };
-    } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
+    } catch (e) { /* ignore */ }
     setActiveView('shipdata');
   } catch (_) { alert('Transfer failed.'); }
 }
@@ -1841,8 +1836,7 @@ if (btnTransferShipData) {
       try {
         frame.contentWindow.postMessage(msg, targetOrigin || '*');
         frame.contentWindow.postMessage(payload, targetOrigin || '*');
-        STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, shapes:['wrapper','raw'], keys: Object.keys(payload||{}) };
-      } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
+      } catch (e) { /* ignore */ }
       setActiveView('shipdata');
     } catch (_) { alert('Transfer failed.'); }
   });
@@ -2136,7 +2130,7 @@ btnExportJson.addEventListener('click', async (ev) => {
       return;
     }
     if (ev && ev.shiftKey) {
-      const data = { build: APP_BUILD, tanks, parcels, plan: res, debug_transfer: (typeof STOWAGE_TRANSFER_DEBUG !== 'undefined' ? STOWAGE_TRANSFER_DEBUG : null) };
+      const data = { build: APP_BUILD, tanks, parcels, plan: res };
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
       alert('Copied plan JSON to clipboard.');
