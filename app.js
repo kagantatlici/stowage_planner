@@ -1472,7 +1472,18 @@ function computeVariants() {
 
   function planSig(res) {
     if (!res || !Array.isArray(res.allocations)) return '';
-    return res.allocations.map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`).sort().join('|');
+    const cargoSig = res.allocations
+      .map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`)
+      .sort()
+      .join('|');
+    const ballast = (res.ballastAllocations || res.ballast_allocations) || [];
+    const ballastSig = ballast.length
+      ? '::B::' + ballast
+          .map(b => `${b.tank_id}:${(b.assigned_m3||0).toFixed(3)}`)
+          .sort()
+          .join('|')
+      : '';
+    return cargoSig + ballastSig;
   }
   function isSingleWing(res) {
     try {
