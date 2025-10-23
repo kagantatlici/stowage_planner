@@ -592,20 +592,20 @@ function parseShipsFromExport(json) {
 function renderTankEditor() {
   const rows = tanks.map((t, idx) => {
     return `<tr>
-      <td><input value="${t.id}" data-idx="${idx}" data-field="id" style="width:90px"/></td>
+      <td><input value="${t.id}" data-idx="${idx}" data-field="id" style="width:70px"/></td>
       <td>
-        <select data-idx="${idx}" data-field="side">
+        <select data-idx="${idx}" data-field="side" style="width:88px">
           <option value="port" ${t.side==='port'?'selected':''}>port</option>
           <option value="starboard" ${t.side==='starboard'?'selected':''}>starboard</option>
           <option value="center" ${t.side==='center'?'selected':''}>center</option>
         </select>
       </td>
-      <td><input type="number" step="1" min="0" value="${t.volume_m3}" data-idx="${idx}" data-field="volume_m3" style="width:90px"/></td>
-      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.min_pct||0)*100)}" data-idx="${idx}" data-field="min_pct_pct" style="width:70px"/></td>
-      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.max_pct||0)*100)}" data-idx="${idx}" data-field="max_pct_pct" style="width:70px"/></td>
+      <td><input type="number" step="1" min="0" value="${t.volume_m3}" data-idx="${idx}" data-field="volume_m3" style="width:72px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.min_pct||0)*100)}" data-idx="${idx}" data-field="min_pct_pct" style="width:56px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.max_pct||0)*100)}" data-idx="${idx}" data-field="max_pct_pct" style="width:56px"/></td>
       <td><input type="checkbox" ${t.included?'checked':''} data-idx="${idx}" data-field="included"/></td>
-      <td><input type="number" step="0.1" min="0" value="${Number(t.preload_m3||0)}" data-idx="${idx}" data-field="preload_m3" style="width:90px"/></td>
-      <td><input type="number" step="0.0001" min="0" value="${((t.preload_density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="preload_rho_gcm3" style="width:90px"/></td>
+      <td><input type="number" step="0.1" min="0" value="${Number(t.preload_m3||0)}" data-idx="${idx}" data-field="preload_m3" style="width:70px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${((t.preload_density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="preload_rho_gcm3" style="width:70px"/></td>
       <td class="row-controls"><button data-act="del-tank" data-idx="${idx}">Delete</button></td>
     </tr>`;
   }).join('');
@@ -656,15 +656,22 @@ function renderBallastEditor() {
     const preload = Number(m.preload_m3 || 0);
     const rho = ((m.preload_density_kg_m3 || 1025) / 1000).toFixed(4);
     const included = (m.included ?? true);
+    const side = (m.side || guessSideFromId(bt.id) || '');
     return `<tr>
       <td>${bt.id}</td>
-      <td>${guessSideFromId(bt.id) || '-'}</td>
+      <td>
+        <select data-id="${bt.id}" data-field="side" style="width:88px">
+          <option value="port" ${side==='port'?'selected':''}>port</option>
+          <option value="starboard" ${side==='starboard'?'selected':''}>starboard</option>
+          <option value="center" ${side==='center'?'selected':''}>center</option>
+        </select>
+      </td>
       <td style="text-align:right;">${Number(bt.cap_m3||0)}</td>
-      <td><input type="number" step="1" min="0" max="100" value="${minPct}" data-id="${bt.id}" data-field="min_pct_pct" style="width:60px"/></td>
-      <td><input type="number" step="1" min="0" max="100" value="${maxPct}" data-id="${bt.id}" data-field="max_pct_pct" style="width:60px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${minPct}" data-id="${bt.id}" data-field="min_pct_pct" style="width:56px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${maxPct}" data-id="${bt.id}" data-field="max_pct_pct" style="width:56px"/></td>
       <td><input type="checkbox" ${included?'checked':''} data-id="${bt.id}" data-field="included"/></td>
-      <td><input type="number" step="0.1" min="0" value="${preload}" data-id="${bt.id}" data-field="preload_m3" style="width:80px"/></td>
-      <td><input type="number" step="0.0001" min="0" value="${rho}" data-id="${bt.id}" data-field="preload_rho_gcm3" style="width:80px"/></td>
+      <td><input type="number" step="0.1" min="0" value="${preload}" data-id="${bt.id}" data-field="preload_m3" style="width:70px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${rho}" data-id="${bt.id}" data-field="preload_rho_gcm3" style="width:70px"/></td>
     </tr>`;
   }).join('');
   ballastEditorEl.innerHTML = `
@@ -675,7 +682,7 @@ function renderBallastEditor() {
       <tbody>${rows}</tbody>
     </table>
   `;
-  ballastEditorEl.querySelectorAll('input').forEach(el => {
+  ballastEditorEl.querySelectorAll('input,select').forEach(el => {
     el.addEventListener('change', () => {
       const id = el.getAttribute('data-id'); const field = el.getAttribute('data-field');
       const was = loadBallastMeta(); const rec = Object.assign({ min_pct:0, max_pct:1, included:true, preload_m3:0, preload_density_kg_m3:1025 }, was[id]||{});
@@ -684,6 +691,7 @@ function renderBallastEditor() {
       else if (field === 'max_pct_pct') rec.max_pct = Math.max(0, Math.min(100, Number(el.value)||0))/100;
       else if (field === 'preload_m3') rec.preload_m3 = Math.max(0, Number(String(el.value).replace(',', '.'))||0);
       else if (field === 'preload_rho_gcm3') { const g=Number(String(el.value).replace(',', '.')); rec.preload_density_kg_m3 = isNaN(g)? rec.preload_density_kg_m3 : g*1000; }
+      else if (field === 'side') rec.side = String(el.value||'');
       was[id] = rec; saveBallastMeta(was);
       render();
     });
@@ -1147,7 +1155,12 @@ function renderSummaryAndSvg(result) {
       else usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: Number(b.assigned_m3)||0 });
     });
     // Pair by base id and sort rows by LCG from Ship Data (bow/top first)
-    const getSide = (id)=> guessSideFromId(id) || null;
+    const bmetaSide = loadBallastMeta ? loadBallastMeta() : {};
+    const getSide = (id)=> {
+      const m = bmetaSide && bmetaSide[id];
+      if (m && m.side) return m.side;
+      return guessSideFromId(id) || null;
+    };
     const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
     /** @type {Record<string,{P:any,S:any,centers:any[],lcg:number}>} */
     const groups = {};
