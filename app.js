@@ -1050,6 +1050,7 @@ function renderSummaryAndSvg(result) {
           <div class="empty-hint">%</div>
         `}
       `;
+      try { const tk = tanks.find(t=>t.id===star.id); const pv = Number(tk?.preload_m3)||0; if (pv>0){ const pl=document.createElement('div'); pl.className='meta'; pl.textContent=`Preload: ${pv.toFixed(0)} m³`; cellS.appendChild(pl);} } catch {}
       if (parcel) cellS.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellS);
     }
@@ -1274,6 +1275,15 @@ let selectedVariantKey = 'engine_min_k';
 
 function computeVariants() {
   ensureUniqueParcelIDs();
+  // Build policy (preloads) before computing variants
+  const buildPolicy = () => {
+    const pre = {};
+    for (const t of (tanks||[])) {
+      const v = Number(t?.preload_m3)||0; if (v>0) pre[t.id] = { v };
+    }
+    return { preloads: pre };
+  };
+  const policy = buildPolicy();
   const vMin = computePlan(tanks, parcels, policy);
   const vMax = computePlanMaxRemaining(tanks, parcels, policy);
   const vAgg = computePlanMinTanksAggressive(tanks, parcels, policy);
@@ -1308,21 +1318,10 @@ function computeVariants() {
     if ((parcels||[]).length > 0) {
       const p0 = parcels[0];
       const frParcels = [{ ...p0, total_m3: undefined, fill_remaining: true }];
-      vAllMax = computePlan(tanks, frParcels);
+      vAllMax = computePlan(tanks, frParcels, policy);
       if (!vAllMax || !Array.isArray(vAllMax.allocations) || (vAllMax?.diagnostics?.errors||[]).length) vAllMax = null;
     }
   } catch {}
-  // Build policy from preloads
-  const buildPolicy = () => {
-    const pre = {};
-    for (const t of tanks||[]) {
-      const v = Number(t?.preload_m3)||0; if (v<=0) continue;
-      pre[t.id] = { v };
-    }
-    return { preloads: pre };
-  };
-  const policy = buildPolicy();
-
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
   let vMinTrimAlts = [];
@@ -1330,10 +1329,8 @@ function computeVariants() {
   let vEvenKeelUse = null;
   try {
     const cands = [];
-    const vMinPol = computePlan(tanks, parcels, policy);
-    if (vMinPol && Array.isArray(vMinPol.allocations)) cands.push(vMinPol);
-    const altListPol = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
-    for (const r of altListPol) if (r && Array.isArray(r.allocations)) cands.push(r);
+    if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
+    for (const r of altList) if (r && Array.isArray(r.allocations)) cands.push(r);
     // Filter infeasible for our spec: underfill band used or under-loaded vs requested (>0)
     const tol = 0.1; // tons
     const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors||[]).length);
@@ -1372,8 +1369,8 @@ function computeVariants() {
             .filter(i=>i!=null)
         ));
         if (pairIdxs.length) {
-          const policy = { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } } };
-      const baseAll = computePlanMinKPolicy(tanks, parcels, { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } }, preloads: policy.preloads });
+          const fpol = { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } }, preloads: (policy && policy.preloads) || {} };
+          const baseAll = computePlanMinKPolicy(tanks, parcels, fpol);
           if (baseAll && Array.isArray(baseAll.allocations) && !(baseAll?.diagnostics?.errors||[]).length) {
             const opt = optimizeTrimWithinSelection(baseAll, { includeSlops: true }) || baseAll;
             const met = computeHydroForAllocations(opt.allocations||[]);
