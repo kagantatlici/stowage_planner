@@ -140,8 +140,8 @@ const APP_BUILD = (() => {
   }
 })();
 
-// DEBUG_BALLAST: temporary debug container (remove after diagnosing)
-let STOWAGE_DEBUG = { ballast: null };
+// DEBUG_TRANSFER: temporary debug container (remove after diagnosing transfer)
+let STOWAGE_TRANSFER_DEBUG = { note: 'DEBUG_TRANSFER', last: null };
 
 // ---- Evenkeel helper (local) ----
 function cotPairIndex(id) {
@@ -1452,13 +1452,7 @@ function computeVariants() {
   try {
     const baseForBallast = vMinTrim || vMin;
     if (baseForBallast && Array.isArray(baseForBallast.allocations)) {
-      const dbgBal = { note: 'DEBUG_BALLAST', BALLAST_TANKS_count: (BALLAST_TANKS||[]).length };
-      try {
-        const bm = loadBallastMeta ? loadBallastMeta() : {};
-        dbgBal.ballast_meta_included = Object.values(bm||{}).filter(m => (m && m.included!==false)).length;
-      } catch {}
-      const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: 1.025, improveThreshold: 0.05, debug: dbgBal });
-      STOWAGE_DEBUG.ballast = dbgBal;
+      const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: 1.025, improveThreshold: 0.05 });
       if (bal && Array.isArray(bal.ballastAllocations) && bal.ballastAllocations.length) vMinTrimBallast = bal;
     }
   } catch {}
@@ -1790,7 +1784,7 @@ async function buildShipDataTransferPayload() {
     const allocations_combined = allocs.concat(
       ballast.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', weight_mt: b.weight_mt, assigned_m3: b.assigned_m3, fill_pct: undefined, percent: b.percent, rho: b.rho }))
     );
-    return {
+    const payload = {
       type: 'apply_stowage_plan',
       version: 1,
       rho: (SHIP_PARAMS.RHO_REF != null) ? Number(SHIP_PARAMS.RHO_REF) : undefined,
@@ -1808,6 +1802,9 @@ async function buildShipDataTransferPayload() {
       allocations_with_ballast: allocations_combined,
       ballast_allocations: ballast
     };
+    // DEBUG_TRANSFER: snapshot payload
+    try { STOWAGE_TRANSFER_DEBUG.last = { when: new Date().toISOString(), payload, hasBallast: ballast.length>0, allocs: allocs.length }; } catch {}
+    return payload;
   } catch (_) { return null; }
 }
 
@@ -1820,7 +1817,7 @@ function postPlanToShipData() {
     const msg = { type: 'apply_stowage_plan', payload };
     let targetOrigin = '*';
     try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-    frame.contentWindow.postMessage(msg, targetOrigin || '*');
+    try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, keys: Object.keys(payload||{}) }; } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
     setActiveView('shipdata');
   } catch (_) { alert('Transfer failed.'); }
 }
@@ -1835,7 +1832,7 @@ if (btnTransferShipData) {
       const msg = { type: 'apply_stowage_plan', payload };
       let targetOrigin = '*';
       try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-      frame.contentWindow.postMessage(msg, targetOrigin || '*');
+      try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); STOWAGE_TRANSFER_DEBUG.posted = { ok:true, targetOrigin, keys: Object.keys(payload||{}) }; } catch (e) { try { STOWAGE_TRANSFER_DEBUG.posted = { ok:false, error: String(e) }; } catch {} }
       setActiveView('shipdata');
     } catch (_) { alert('Transfer failed.'); }
   });
@@ -2129,7 +2126,7 @@ btnExportJson.addEventListener('click', async (ev) => {
       return;
     }
     if (ev && ev.shiftKey) {
-      const data = { build: APP_BUILD, tanks, parcels, plan: res, debug: (typeof STOWAGE_DEBUG !== 'undefined' ? STOWAGE_DEBUG : null) };
+      const data = { build: APP_BUILD, tanks, parcels, plan: res, debug_transfer: (typeof STOWAGE_TRANSFER_DEBUG !== 'undefined' ? STOWAGE_TRANSFER_DEBUG : null) };
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
       alert('Copied plan JSON to clipboard.');
@@ -2287,7 +2284,6 @@ function optimizeTrimWithinSelection(baseRes, opts) {
 function optimizeBallastForTrim(baseRes, opts) {
   try {
     const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05, stopEps: 0.002 }, opts||{});
-    const dbg = options.debug || null; // DEBUG_BALLAST
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     // Helper: ballast meta and grouping
     const bmeta = loadBallastMeta ? loadBallastMeta() : {};
@@ -2347,13 +2343,7 @@ function optimizeBallastForTrim(baseRes, opts) {
         }
       });
     });
-    if (dbg) {
-      dbg.present = true;
-      dbg.pairs = pairs.map(p => p.type==='pair' ? ({ type:'pair', P:p.P.id, S:p.S.id, head: p.head, lcg: p.lcg }) : ({ type:'center', C:p.C.id, head:p.head, lcg:p.lcg }));
-      dbg.pairsCount = pairs.length;
-      dbg.improveThreshold = options.improveThreshold;
-    }
-    if (!pairs.length) { if (dbg) dbg.reason = 'no_pairs'; return null; }
+    if (!pairs.length) { return null; }
     // Initial hydro and allocations
     const cargoAllocs = baseRes.allocations.map(a => ({...a}));
     const ballastAllocs = []; // {tank_id, assigned_m3}
@@ -2363,7 +2353,6 @@ function optimizeBallastForTrim(baseRes, opts) {
     let met = evalTrim();
     if (!met || !isFinite(met.Trim)) return null;
     const startTrim = met.Trim;
-    if (dbg) dbg.startTrim = startTrim;
     const steps = [200, 100, 50, 25, 10];
     const eps=1e-6;
     // Simple end-first strategy: fill from relevant end one group at a time
@@ -2407,8 +2396,7 @@ function optimizeBallastForTrim(baseRes, opts) {
     const final = evalTrim();
     if (!final || !isFinite(final.Trim)) return null;
     const improve = Math.abs(startTrim) - Math.abs(final.Trim);
-    if (dbg) { dbg.finalTrim = final.Trim; dbg.improvement = improve; dbg.allocations = ballastAllocs.slice(); }
-    if (improve <= options.improveThreshold || ballastAllocs.length === 0) { if (dbg) dbg.reason = 'no_improvement_threshold'; return null; }
+    if (improve <= options.improveThreshold || ballastAllocs.length === 0) { return null; }
     // Build diagnostics including ballast
     const allAllocs = [ ...cargoAllocs, ...ballastAllocs.map(b=>({ tank_id:b.tank_id, parcel_id:'BALLAST', assigned_m3:b.assigned_m3, fill_pct:0, weight_mt: b.assigned_m3 * options.rho_t_m3 })) ];
     const hydro = computeHydroForAllocations(allAllocs);
