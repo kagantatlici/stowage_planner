@@ -864,7 +864,8 @@ function renderSummaryAndSvg(result) {
     try {
       const byTank = new Map();
       tanks.forEach(t => byTank.set(t.id, t));
-      const allAllocs = allocations.concat(ballastAllocs || []);
+      const rhoB = 1.025;
+      const allAllocs = allocations.concat((ballastAllocs||[]).map(b => ({ tank_id: b.tank_id, parcel_id:'BALLAST', assigned_m3: Number(b.assigned_m3)||0, weight_mt: (Number(b.assigned_m3)||0) * rhoB })));
       let pW = 0, sW = 0;
       allAllocs.forEach(a => {
         const t = byTank.get(a.tank_id);
@@ -930,7 +931,8 @@ function renderSummaryAndSvg(result) {
       if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) {
         hbox.style.display = 'none';
       } else {
-        const allAllocs = allocations.concat(ballastAllocs || []);
+        const rhoB = 1.025;
+        const allAllocs = allocations.concat((ballastAllocs||[]).map(b => ({ tank_id: b.tank_id, parcel_id:'BALLAST', assigned_m3: Number(b.assigned_m3)||0, weight_mt: (Number(b.assigned_m3)||0) * rhoB })));
         const metrics = computeHydroForAllocations(allAllocs);
         if (!metrics) {
           hbox.style.display = 'none';
@@ -2284,7 +2286,7 @@ function optimizeTrimWithinSelection(baseRes, opts) {
 // ---- Ballast optimizer (adds seawater; cargo fixed) ----
 function optimizeBallastForTrim(baseRes, opts) {
   try {
-    const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05 }, opts||{});
+    const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05, stopEps: 0.002 }, opts||{});
     const dbg = options.debug || null; // DEBUG_BALLAST
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     // Helper: ballast meta and grouping
@@ -2399,7 +2401,7 @@ function optimizeBallastForTrim(baseRes, opts) {
         }
         // re-check trim; if near zero, stop early
         const now = evalTrim();
-        if (now && Math.abs(now.Trim) < options.improveThreshold) break;
+        if (now && Math.abs(now.Trim) < options.stopEps) break;
       }
     }
     const final = evalTrim();
