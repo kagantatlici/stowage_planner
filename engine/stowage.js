@@ -208,13 +208,17 @@ function chooseK_uniform(V, Cmin, Cmax, availablePairsCount, availableCentersCou
 function chooseK_nonuniform(V, orderedPairs, pairs, freeCenters, mode = 'min_k', opts = undefined) {
   const bandAllowed = !!(opts && typeof opts.bandMinPct === 'number' && (opts.bandSlotsLeft || 0) > 0);
   const bandMinPct = opts?.bandMinPct ?? 0.5;
+  const preloads = (opts && opts.preloads) || {};
+  const getPreload = (t) => Math.max(0, (preloads[t.id]?.v || 0));
+  const effMin = (t) => Math.max(0, (t.volume_m3 * t.min_pct) - getPreload(t));
+  const effMax = (t) => Math.max(0, (t.volume_m3 * t.max_pct) - getPreload(t));
   // Precompute pair min/max arrays and also for k_low/k_high bounds
   const pairStats = orderedPairs.map(idx => {
     const pr = pairs[idx];
     return {
       idx,
-      min: pr.port.volume_m3 * pr.port.min_pct + pr.starboard.volume_m3 * pr.starboard.min_pct,
-      max: pr.port.volume_m3 * pr.port.max_pct + pr.starboard.volume_m3 * pr.starboard.max_pct
+      min: effMin(pr.port) + effMin(pr.starboard),
+      max: effMax(pr.port) + effMax(pr.starboard)
     };
   });
   // Bounds for k_low: minimal p such that sum of top-p max >= V
@@ -228,7 +232,7 @@ function chooseK_nonuniform(V, orderedPairs, pairs, freeCenters, mode = 'min_k',
   // Consider odd with center for k_low as well
   const sortedCenters = [...freeCenters].sort((a,b)=>a.id.localeCompare(b.id));
   if (k_low === 0 && sortedCenters.length > 0) {
-    const cmax = sortedCenters[0].volume_m3 * sortedCenters[0].max_pct; // best-case first center
+    const cmax = effMax(sortedCenters[0]); // best-case first center
     accMax = 0;
     if (cmax + 1e-9 >= V) k_low = 1; // center alone
     else {
@@ -248,7 +252,7 @@ function chooseK_nonuniform(V, orderedPairs, pairs, freeCenters, mode = 'min_k',
   }
   // Consider odd with center for k_high
   for (const c of sortedCenters) {
-    const cmin = c.volume_m3 * c.min_pct;
+    const cmin = effMin(c);
     accMin = cmin;
     if (V + 1e-9 >= accMin) k_high = Math.max(k_high, 1);
     for (let p = 1; p <= byMinAsc.length; p++) {
@@ -286,8 +290,8 @@ function chooseK_nonuniform(V, orderedPairs, pairs, freeCenters, mode = 'min_k',
       for (const pos of idxs) {
         const idx = orderedPairs[pos];
         const pr = pairs[idx];
-        const minSum = pr.port.volume_m3 * pr.port.min_pct + pr.starboard.volume_m3 * pr.starboard.min_pct;
-        const maxSum = pr.port.volume_m3 * pr.port.max_pct + pr.starboard.volume_m3 * pr.starboard.max_pct;
+        const minSum = effMin(pr.port) + effMin(pr.starboard);
+        const maxSum = effMax(pr.port) + effMax(pr.starboard);
         sMin += minSum;
         sMax += maxSum;
         sCmax += maxSum;
@@ -295,8 +299,8 @@ function chooseK_nonuniform(V, orderedPairs, pairs, freeCenters, mode = 'min_k',
         idxSetNorm.push(ni);
         if (ni < midIdx) fwdCap += maxSum; else if (ni > midIdx) aftCap += maxSum; // center-equivalent ignored
         if (bandAllowed) {
-          const redP = pr.port.volume_m3 * (pr.port.min_pct - bandMinPct);
-          const redS = pr.starboard.volume_m3 * (pr.starboard.min_pct - bandMinPct);
+          const redP = Math.max(0, (pr.port.volume_m3 * (pr.port.min_pct - bandMinPct)));
+          const redS = Math.max(0, (pr.starboard.volume_m3 * (pr.starboard.min_pct - bandMinPct)));
           maxReduction = Math.max(maxReduction, redP, redS, 0);
         }
         pickedIdxs.push(idx);
@@ -615,6 +619,12 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     allocations.push({ tank_id: tank.id, parcel_id: parcel.id, assigned_m3: vol, fill_pct, weight_mt });
   }
 
+  // Helper for preloads
+  const preloads = (policy && policy.preloads) || {};
+  const getPreload = (t) => Math.max(0, (preloads[t.id]?.v || 0));
+  const effMin = (t) => Math.max(0, (t.volume_m3 * t.min_pct) - getPreload(t));
+  const effMax = (t) => Math.max(0, (t.volume_m3 * t.max_pct) - getPreload(t));
+
   // Fixed parcels ITCP selection and assignment
   for (const p of fixedSorted) {
     const V = p.total_m3 ?? 0;
@@ -630,7 +640,7 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     const forcedSel = policy.forcedSelection && policy.forcedSelection[p.id];
     let selection = forcedSel
       ? { chosen_k: (forcedSel.center ? forcedSel.reservedPairs.length * 2 + 1 : forcedSel.reservedPairs.length * 2), reservedPairs: forcedSel.reservedPairs, center: forcedSel.center ? freeCenters.find(c=>c.id===forcedSel.center) || null : null, k_low: 0, k_high: 0, parity_adjustment: 'none', reason: 'forced selection' }
-      : chooseK_nonuniform(V, isSmallParcel ? freePairsAll : freePairsNoBuffer, pairs, freeCenters, mode, { bandMinPct, bandSlotsLeft });
+      : chooseK_nonuniform(V, isSmallParcel ? freePairsAll : freePairsNoBuffer, pairs, freeCenters, mode, { bandMinPct, bandSlotsLeft, preloads });
     let releasedBuffer = false;
     if ((!selection.chosen_k || selection.chosen_k === null) && !isSmallParcel && bufferPairs.size > 0) {
       const tryPairs = reservedSlopsForParcelId && p.id !== reservedSlopsForParcelId ? freePairsAll.filter(idx => idx !== slopIdx) : freePairsAll;
@@ -665,8 +675,8 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
       const singlePref = included
         .filter(t => t.included && t.side !== 'center' && !usedTankIdsPref.has(t.id))
         .map(t => {
-          const minV = t.volume_m3 * t.min_pct;
-          const maxV = t.volume_m3 * t.max_pct;
+          const minV = effMin(t);
+          const maxV = effMax(t);
           const bandMinV = t.volume_m3 * (typeof bandMinPct === 'number' ? bandMinPct : t.min_pct);
           const fitsStrict = V + 1e-9 >= minV && V <= maxV + 1e-9;
           const fitsWithBand = (V + 1e-9 >= bandMinV && V <= maxV + 1e-9);
@@ -841,11 +851,11 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     const vessels = [];
     for (const idx of chosenPairIdxs) {
       const pr = pairs[idx];
-      vessels.push({ tank: pr.port, min: pr.port.volume_m3 * pr.port.min_pct, max: pr.port.volume_m3 * pr.port.max_pct, vol: 0 });
-      vessels.push({ tank: pr.starboard, min: pr.starboard.volume_m3 * pr.starboard.min_pct, max: pr.starboard.volume_m3 * pr.starboard.max_pct, vol: 0 });
+      vessels.push({ tank: pr.port, min: effMin(pr.port), max: effMax(pr.port), vol: 0 });
+      vessels.push({ tank: pr.starboard, min: effMin(pr.starboard), max: effMax(pr.starboard), vol: 0 });
     }
     if (centerTank) {
-      vessels.push({ tank: centerTank, min: centerTank.volume_m3 * centerTank.min_pct, max: centerTank.volume_m3 * centerTank.max_pct, vol: 0 });
+      vessels.push({ tank: centerTank, min: effMin(centerTank), max: effMax(centerTank), vol: 0 });
     }
     let sumMin = vessels.reduce((s, e) => s + e.min, 0);
     const sumMax = vessels.reduce((s, e) => s + e.max, 0);
@@ -914,21 +924,24 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
       let capSumAll = 0;
       for (const idx of freePairsAll) {
         const pr = pairs[idx];
-        capSumAll += pr.port.volume_m3 * pr.port.max_pct + pr.starboard.volume_m3 * pr.starboard.max_pct;
+        capSumAll += effMax(pr.port) + effMax(pr.starboard);
       }
-      for (const c of freeCentersList) capSumAll += c.volume_m3 * c.max_pct;
+      for (const c of freeCentersList) capSumAll += effMax(c);
       if (Vrem > capSumAll + 1e-9) {
         // Fill centers at max first, then all pairs at max
         const reserved = [];
         for (const c of freeCentersList) {
-          addAllocation(c, remaining, c.volume_m3 * c.max_pct);
+          const vmax = effMax(c);
+          if (vmax > 1e-9) addAllocation(c, remaining, vmax);
           usedCenters.add(c.id);
           reserved.push(c.id);
         }
         for (const idx of freePairsAll) {
           const pr = pairs[idx];
-          addAllocation(pr.port, remaining, pr.port.volume_m3 * pr.port.max_pct);
-          addAllocation(pr.starboard, remaining, pr.starboard.volume_m3 * pr.starboard.max_pct);
+          const vmaxP = effMax(pr.port);
+          const vmaxS = effMax(pr.starboard);
+          if (vmaxP > 1e-9) addAllocation(pr.port, remaining, vmaxP);
+          if (vmaxS > 1e-9) addAllocation(pr.starboard, remaining, vmaxS);
           usedPairs.add(idx);
           reserved.push(`COT${idx}P/S`);
         }
@@ -985,11 +998,11 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
         const vessels = [];
         for (const idx of chosenPairIdxs) {
           const pr = pairs[idx];
-          vessels.push({ tank: pr.port, min: pr.port.volume_m3 * pr.port.min_pct, max: pr.port.volume_m3 * pr.port.max_pct, vol: 0 });
-          vessels.push({ tank: pr.starboard, min: pr.starboard.volume_m3 * pr.starboard.min_pct, max: pr.starboard.volume_m3 * pr.starboard.max_pct, vol: 0 });
+          vessels.push({ tank: pr.port, min: effMin(pr.port), max: effMax(pr.port), vol: 0 });
+          vessels.push({ tank: pr.starboard, min: effMin(pr.starboard), max: effMax(pr.starboard), vol: 0 });
         }
         if (centerTank) {
-          vessels.push({ tank: centerTank, min: centerTank.volume_m3 * centerTank.min_pct, max: centerTank.volume_m3 * centerTank.max_pct, vol: 0 });
+          vessels.push({ tank: centerTank, min: effMin(centerTank), max: effMax(centerTank), vol: 0 });
         }
         let sumMin = vessels.reduce((s, e) => s + e.min, 0);
         const sumMax = vessels.reduce((s, e) => s + e.max, 0);
@@ -1069,18 +1082,17 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
     if (tank.side === 'port') port_weight_mt += a.weight_mt;
     if (tank.side === 'starboard') starboard_weight_mt += a.weight_mt;
   }
-  // Validate per-tank min/max and record warnings
-  for (const a of allocations) {
-    const tank = included.find(t => t.id === a.tank_id);
-    if (!tank) continue;
-    const minV = tank.volume_m3 * tank.min_pct - 1e-6;
-    const maxV = tank.volume_m3 * tank.max_pct + 1e-6;
-    if (a.assigned_m3 < minV) {
-      if (!bandUsedTankIds.has(a.tank_id)) {
-        warnings.push(`Tank ${a.tank_id}: below min (${a.assigned_m3.toFixed(1)} < ${(tank.volume_m3*tank.min_pct).toFixed(1)})`);
-      }
-    }
-    if (a.assigned_m3 > maxV) warnings.push(`Tank ${a.tank_id}: above max (${a.assigned_m3.toFixed(1)} > ${(tank.volume_m3*tank.max_pct).toFixed(1)})`);
+  // Validate per-tank min/max with preloads considered (sum of assigned across parcels)
+  const sumByTank = new Map();
+  allocations.forEach(a => sumByTank.set(a.tank_id, (sumByTank.get(a.tank_id)||0) + (a.assigned_m3||0)));
+  for (const t of included) {
+    const assigned = sumByTank.get(t.id) || 0;
+    const preloadV = getPreload(t);
+    const totalV = assigned + preloadV;
+    const minV = t.volume_m3 * t.min_pct - 1e-6;
+    const maxV = t.volume_m3 * t.max_pct + 1e-6;
+    if (totalV < minV) warnings.push(`Tank ${t.id}: below min with preload (${totalV.toFixed(1)} < ${(t.volume_m3*t.min_pct).toFixed(1)})`);
+    if (totalV > maxV) warnings.push(`Tank ${t.id}: above max with preload (${totalV.toFixed(1)} > ${(t.volume_m3*t.max_pct).toFixed(1)})`);
   }
   const denom = port_weight_mt + starboard_weight_mt;
   const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
@@ -1099,28 +1111,34 @@ function computePlanInternal(tanks, parcels, mode = 'min_k', policy = {}) {
   return { allocations, diagnostics };
 }
 
-export function computePlan(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'min_k');
+export function computePlan(tanks, parcels, policy) {
+  return computePlanInternal(tanks, parcels, 'min_k', policy || {});
 }
 
-export function computePlanMaxRemaining(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'min_locked_global');
+export function computePlanMaxRemaining(tanks, parcels, policy) {
+  return computePlanInternal(tanks, parcels, 'min_locked_global', policy || {});
 }
 
-export function computePlanSingleWingAlternative(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'min_k', { preferWingEvenIfCenter: true });
+export function computePlanSingleWingAlternative(tanks, parcels, policy) {
+  const base = Object.assign({}, policy||{});
+  base.preferWingEvenIfCenter = true;
+  return computePlanInternal(tanks, parcels, 'min_k', base);
 }
 
-export function computePlanMinTanksAggressive(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'min_k', { aggressiveSingleWing: true });
+export function computePlanMinTanksAggressive(tanks, parcels, policy) {
+  const base = Object.assign({}, policy||{});
+  base.aggressiveSingleWing = true;
+  return computePlanInternal(tanks, parcels, 'min_k', base);
 }
 
-export function computePlanMaxK(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'max_k');
+export function computePlanMaxK(tanks, parcels, policy) {
+  return computePlanInternal(tanks, parcels, 'max_k', policy || {});
 }
 
-export function computePlanMinKeepSlopsSmall(tanks, parcels) {
-  return computePlanInternal(tanks, parcels, 'min_k', { hardReserveSlopsSmall: true });
+export function computePlanMinKeepSlopsSmall(tanks, parcels, policy) {
+  const base = Object.assign({}, policy||{});
+  base.hardReserveSlopsSmall = true;
+  return computePlanInternal(tanks, parcels, 'min_k', base);
 }
 
 // Expert: compute plan with custom policy (e.g., relaxed band minimums for upper-bound draft solve)
@@ -1129,7 +1147,7 @@ export function computePlanMinKPolicy(tanks, parcels, policy) {
 }
 
 // Enumerate alternative minimal-k plans: returns up to maxAlts results with different pair selections.
-export function computePlanMinKAlternatives(tanks, parcels, maxAlts = 5) {
+export function computePlanMinKAlternatives(tanks, parcels, maxAlts = 5, policy) {
   // Current implementation supports the common case with one fixed (non-remaining) parcel.
   const { pairs, centers, included } = groupTanks(tanks);
   const fixed = parcels.filter(p => !p.fill_remaining);
@@ -1139,7 +1157,7 @@ export function computePlanMinKAlternatives(tanks, parcels, maxAlts = 5) {
   const pairIndices = Object.keys(pairs).map(n => parseInt(n, 10)).filter(n => !!pairs[n]);
   const orderedPairs = middleOutOrder(pairIndices);
   // Determine minimal k using the existing selector
-  const sel = chooseK_nonuniform(V, orderedPairs, pairs, centers, 'min_k', {});
+  const sel = chooseK_nonuniform(V, orderedPairs, pairs, centers, 'min_k', { preloads: (policy&&policy.preloads)||{} });
   if (!sel.chosen_k) return [];
   const pCount = sel.chosen_k % 2 === 0 ? sel.chosen_k / 2 : (sel.chosen_k - 1) / 2;
   const useCenter = sel.chosen_k % 2 === 1;
@@ -1157,8 +1175,8 @@ export function computePlanMinKAlternatives(tanks, parcels, maxAlts = 5) {
   for (const idxs of combos(orderedPairs, pCount)) {
     if (isMidOnlyContiguousBlock(idxs, minCot, maxCot)) continue;
     for (const c of centersList) {
-      const policy = { forcedSelection: { [p0.id]: { reservedPairs: idxs, center: c ? c.id : null } } };
-      const r = computePlanInternal(tanks, parcels, 'min_k', policy);
+      const pol = { forcedSelection: { [p0.id]: { reservedPairs: idxs, center: c ? c.id : null } }, preloads: (policy&&policy.preloads)||{} };
+      const r = computePlanInternal(tanks, parcels, 'min_k', pol);
       const diag = r.diagnostics || {};
       if ((diag.errors && diag.errors.length) || !r.allocations || r.allocations.length === 0) continue;
       // Signature for dedupe

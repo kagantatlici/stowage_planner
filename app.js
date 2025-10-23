@@ -599,13 +599,15 @@ function renderTankEditor() {
       <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.min_pct||0)*100)}" data-idx="${idx}" data-field="min_pct_pct" style="width:70px"/></td>
       <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.max_pct||0)*100)}" data-idx="${idx}" data-field="max_pct_pct" style="width:70px"/></td>
       <td><input type="checkbox" ${t.included?'checked':''} data-idx="${idx}" data-field="included"/></td>
+      <td><input type="number" step="0.1" min="0" value="${Number(t.preload_m3||0)}" data-idx="${idx}" data-field="preload_m3" style="width:90px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${((t.preload_density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="preload_rho_gcm3" style="width:90px"/></td>
       <td class="row-controls"><button data-act="del-tank" data-idx="${idx}">Delete</button></td>
     </tr>`;
   }).join('');
   tankEditorEl.innerHTML = `
     <table>
       <thead>
-        <tr><th>Tank ID</th><th>Side</th><th>Volume (m³)</th><th>Min %</th><th>Max %</th><th>Incl.</th><th></th></tr>
+        <tr><th>Tank ID</th><th>Side</th><th>Volume (m³)</th><th>Min %</th><th>Max %</th><th>Incl.</th><th>Preload (m³)</th><th>ρ preload (g/cm³)</th><th></th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
@@ -619,6 +621,8 @@ function renderTankEditor() {
       if (field === 'volume_m3') val = Number(val);
       if (field === 'min_pct_pct') { field = 'min_pct'; val = Math.max(0, Math.min(100, Number(val)))/100; }
       if (field === 'max_pct_pct') { field = 'max_pct'; val = Math.max(0, Math.min(100, Number(val)))/100; }
+      if (field === 'preload_m3') { val = Math.max(0, Number(String(val).replace(',', '.'))||0); }
+      if (field === 'preload_rho_gcm3') { field = 'preload_density_kg_m3'; const gcm3 = Number(String(val).replace(',', '.')); val = isNaN(gcm3)? (tanks[idx].preload_density_kg_m3||0) : gcm3*1000; }
       tanks[idx] = { ...tanks[idx], [field]: field==='included' ? (target.checked) : val };
       persistLastState();
       render();
@@ -958,6 +962,14 @@ function renderSummaryAndSvg(result) {
           <div class="empty-hint">%</div>
         `}
       `;
+      // Preload line
+      try {
+        const tk = tanks.find(t=>t.id===port.id);
+        const pv = Number(tk?.preload_m3)||0; if (pv>0) {
+          const pl = document.createElement('div'); pl.className='meta'; pl.textContent = `Preload: ${pv.toFixed(0)} m³`;
+          cellP.appendChild(pl);
+        }
+      } catch {}
       if (parcel) cellP.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellP);
     }
@@ -1262,12 +1274,12 @@ let selectedVariantKey = 'engine_min_k';
 
 function computeVariants() {
   ensureUniqueParcelIDs();
-  const vMin = computePlan(tanks, parcels);
-  const vMax = computePlanMaxRemaining(tanks, parcels);
-  const vAgg = computePlanMinTanksAggressive(tanks, parcels);
-  const vWing = computePlanSingleWingAlternative(tanks, parcels);
-  const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels);
-  const altList = computePlanMinKAlternatives(tanks, parcels, 50) || [];
+  const vMin = computePlan(tanks, parcels, policy);
+  const vMax = computePlanMaxRemaining(tanks, parcels, policy);
+  const vAgg = computePlanMinTanksAggressive(tanks, parcels, policy);
+  const vWing = computePlanSingleWingAlternative(tanks, parcels, policy);
+  const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels, policy);
+  const altList = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
 
   // Helper: detect band underfill usage in diagnostics (disallowed for Min Trim variant)
   const usedBand = (res) => {
@@ -1300,6 +1312,17 @@ function computeVariants() {
       if (!vAllMax || !Array.isArray(vAllMax.allocations) || (vAllMax?.diagnostics?.errors||[]).length) vAllMax = null;
     }
   } catch {}
+  // Build policy from preloads
+  const buildPolicy = () => {
+    const pre = {};
+    for (const t of tanks||[]) {
+      const v = Number(t?.preload_m3)||0; if (v<=0) continue;
+      pre[t.id] = { v };
+    }
+    return { preloads: pre };
+  };
+  const policy = buildPolicy();
+
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
   let vMinTrimAlts = [];
@@ -1307,8 +1330,10 @@ function computeVariants() {
   let vEvenKeelUse = null;
   try {
     const cands = [];
-    if (vMin && Array.isArray(vMin.allocations)) cands.push(vMin);
-    for (const r of altList) if (r && Array.isArray(r.allocations)) cands.push(r);
+    const vMinPol = computePlan(tanks, parcels, policy);
+    if (vMinPol && Array.isArray(vMinPol.allocations)) cands.push(vMinPol);
+    const altListPol = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
+    for (const r of altListPol) if (r && Array.isArray(r.allocations)) cands.push(r);
     // Filter infeasible for our spec: underfill band used or under-loaded vs requested (>0)
     const tol = 0.1; // tons
     const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors||[]).length);
@@ -1348,7 +1373,7 @@ function computeVariants() {
         ));
         if (pairIdxs.length) {
           const policy = { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } } };
-          const baseAll = computePlanMinKPolicy(tanks, parcels, policy);
+      const baseAll = computePlanMinKPolicy(tanks, parcels, { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } }, preloads: policy.preloads });
           if (baseAll && Array.isArray(baseAll.allocations) && !(baseAll?.diagnostics?.errors||[]).length) {
             const opt = optimizeTrimWithinSelection(baseAll, { includeSlops: true }) || baseAll;
             const met = computeHydroForAllocations(opt.allocations||[]);
@@ -2244,7 +2269,15 @@ function updateMaxCargoView() {
     if (!Number.isFinite(DIS_FW)) { rsMaxCargoEl.textContent = 'Max cargo: — mt'; return; }
     const W_dis = rho * DIS_FW;
     const light = (Number.isFinite(LIGHT_SHIP.weight_mt) ? Number(LIGHT_SHIP.weight_mt) : 0);
-    const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0);
+    // include preloads total weight
+    let preW = 0;
+    try {
+      for (const t of tanks||[]) {
+        const v = Number(t?.preload_m3)||0; const r = Number(t?.preload_density_kg_m3)||0;
+        if (v>0 && r>0) preW += (v*r)/1000.0;
+      }
+    } catch {}
+    const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0) + preW;
     const cargoMax = Math.max(0, W_dis - others);
     LAST_MAX_CARGO_MT = cargoMax;
     rsMaxCargoEl.textContent = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
@@ -2362,6 +2395,18 @@ function computeHydroForAllocations(allocations) {
     W += w;
     Mx += w * (isFinite(x) ? x : 0);
   });
+  // preloads: treat as virtual cargo at tank LCGs
+  try {
+    for (const t of tanks||[]) {
+      const v = Number(t?.preload_m3)||0; const r = Number(t?.preload_density_kg_m3)||0;
+      if (v>0 && r>0) {
+        const w = (v*r)/1000.0;
+        const x0 = TANK_LCG_MAP.has(t.id) ? Number(TANK_LCG_MAP.get(t.id)) : 0;
+        const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS;
+        W += w; Mx += w * (isFinite(x) ? x : 0);
+      }
+    }
+  } catch {}
   // consumables — use per-type LCGs when available; else fallback to average
   const cons = {
     fo: { w: (fo||0), x: (isFinite(SHIP_PARAMS.LCG_FO) ? SHIP_PARAMS.LCG_FO : null) },
