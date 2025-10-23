@@ -1141,7 +1141,11 @@ function renderSummaryAndSvg(result) {
     const bhull = bShip.querySelector('#bhull');
     // Allocations map (may be empty)
     const usedB = new Map();
-    (ballastAllocs||[]).forEach(b => usedB.set(b.tank_id, b));
+    (ballastAllocs||[]).forEach(b => {
+      const prev = usedB.get(b.tank_id);
+      if (prev) usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: (Number(prev.assigned_m3)||0) + (Number(b.assigned_m3)||0) });
+      else usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: Number(b.assigned_m3)||0 });
+    });
     // Pair by base id and sort rows by LCG from Ship Data (bow/top first)
     const getSide = (id)=> guessSideFromId(id) || null;
     const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
@@ -2391,8 +2395,25 @@ function optimizeBallastForTrim(baseRes, opts) {
     const improve = Math.abs(startTrim) - Math.abs(final.Trim);
     if (dbg) { dbg.finalTrim = final.Trim; dbg.improvement = improve; dbg.allocations = ballastAllocs.slice(); }
     if (improve <= options.improveThreshold || ballastAllocs.length === 0) { if (dbg) dbg.reason = 'no_improvement_threshold'; return null; }
-    // Build result object: keep cargo allocations
-    const diagnostics = baseRes.diagnostics || {};
+    // Build diagnostics including ballast
+    const allAllocs = [ ...cargoAllocs, ...ballastAllocs.map(b=>({ tank_id:b.tank_id, parcel_id:'BALLAST', assigned_m3:b.assigned_m3, fill_pct:0, weight_mt: b.assigned_m3 * options.rho_t_m3 })) ];
+    const hydro = computeHydroForAllocations(allAllocs);
+    // P/S weights from combined allocations
+    let port_weight_mt = 0, starboard_weight_mt = 0;
+    const byId = new Map(tanks.map(t=>[t.id,t]));
+    allAllocs.forEach(a => { const t = byId.get(a.tank_id); if (!t) return; if (t.side==='port') port_weight_mt += (a.weight_mt||0); if (t.side==='starboard') starboard_weight_mt += (a.weight_mt||0); });
+    const denom = port_weight_mt + starboard_weight_mt;
+    const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
+    const balance_status = imbalance_pct <= 10 ? 'Balanced' : 'Warning';
+    const diagnostics = {
+      port_weight_mt,
+      starboard_weight_mt,
+      balance_status,
+      imbalance_pct,
+      reasoning_trace: (baseRes?.diagnostics?.reasoning_trace||[]).concat([{ parcel_id:'BALLAST', V: -1, Cmin: 0, Cmax: 0, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment:'none', per_tank_v:0, violates:false, reserved_pairs: [], reason: 'ballast optimization applied' }]),
+      warnings: baseRes?.diagnostics?.warnings || [],
+      errors: baseRes?.diagnostics?.errors || []
+    };
     return { allocations: cargoAllocs, ballastAllocations: ballastAllocs, diagnostics };
   } catch { return null; }
 }
