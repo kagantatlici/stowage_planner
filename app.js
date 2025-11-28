@@ -212,6 +212,32 @@ function restoreLastState() {
   return restored;
 }
 
+// Parcel color helper: pick next unused color, then generate distinct HSL-based fallback
+const PARCEL_COLOR_PALETTE = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#06b6d4', '#10b981'];
+function hslToHex(h, s, l) {
+  const a = s * Math.min(l, 100 - l) / 10000;
+  const f = n => {
+    const k = (n + h / 30) % 12;
+    const color = l / 100 - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+function pickNextParcelColor(currentParcels) {
+  const used = new Set((currentParcels || []).map(p => String(p.color || '').toLowerCase()));
+  const preset = PARCEL_COLOR_PALETTE.find(c => !used.has(c.toLowerCase()));
+  if (preset) return preset;
+  // Spread hues using golden-angle increments to avoid repeats
+  let idx = (currentParcels || []).length;
+  for (let i = 0; i < 50; i++) {
+    const hue = (idx * 137.508) % 360;
+    const hex = hslToHex(hue, 70, 55).toLowerCase();
+    if (!used.has(hex)) return hex;
+    idx++;
+  }
+  return '#888888';
+}
+
 // Save current tank configuration to project folder via dev server API
 async function saveConfigToFile(filename, name, currentTanks) {
   try {
@@ -1293,7 +1319,15 @@ function renderSummaryAndSvg(result) {
     // Allocations table
     const totalVol = allocations.reduce((s,a)=>s+a.assigned_m3,0);
     const totalWt = allocations.reduce((s,a)=>s+a.weight_mt,0);
-    const rows = allocations.map(a => {
+    const tankOrder = new Map();
+    includedTanks.forEach((t, idx) => tankOrder.set(t.id, idx));
+    const sortedAllocs = allocations.slice().sort((a, b) => {
+      const ai = tankOrder.has(a.tank_id) ? tankOrder.get(a.tank_id) : Number.MAX_SAFE_INTEGER;
+      const bi = tankOrder.has(b.tank_id) ? tankOrder.get(b.tank_id) : Number.MAX_SAFE_INTEGER;
+      if (ai !== bi) return ai - bi;
+      return String(a.tank_id).localeCompare(String(b.tank_id));
+    });
+    const rows = sortedAllocs.map(a => {
       const tank = includedTanks.find(t => t.id === a.tank_id);
       const parcel = parcels.find(p => p.id === a.parcel_id);
       return `<tr>
@@ -1316,17 +1350,51 @@ function renderSummaryAndSvg(result) {
     // Ballast table if any ballast allocations exist (rendered in Cargo & Allocation view)
     const bEl = document.getElementById('ballast-table');
     if (bEl) {
-      bEl.innerHTML = '<div class="muted">Ballast calculation disabled.</div>';
+      if ((ballastAllocs||[]).length === 0) {
+        bEl.innerHTML = '<div class="muted">No ballast used.</div>';
+      } else {
+        const bRows = ballastAllocs.map(b => {
+          const rho = 1.025;
+          const pct = isFinite(b.percent) ? Number(b.percent) : (()=>{
+            const t = (BALLAST_TANKS||[]).find(x => x.id === b.tank_id);
+            if (t && t.cap_m3 > 0 && isFinite(b.assigned_m3)) return (b.assigned_m3 / t.cap_m3) * 100;
+            return undefined;
+          })();
+          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3)||0) * rho;
+          return `<tr>
+            <td>${b.tank_id}</td>
+            <td style="text-align:right;">${isFinite(pct)?pct.toFixed(1)+'%':'-'}</td>
+            <td style="text-align:right;">${(b.assigned_m3||0).toFixed(1)}</td>
+            <td style="text-align:right;">${rho.toFixed(3)}</td>
+            <td style="text-align:right;">${wt.toFixed(1)}</td>
+          </tr>`;
+        }).join('');
+        const bTotV = ballastAllocs.reduce((s,b)=>s+(b.assigned_m3||0),0);
+        const bTotW = ballastAllocs.reduce((s,b)=>{
+          const rho = 1.025;
+          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3)||0) * rho;
+          return s + wt;
+        },0);
+        bEl.innerHTML = `
+          <table class="table">
+            <thead><tr><th>Ballast Tank</th><th style=\"text-align:right;\">%</th><th style=\"text-align:right;\">Vol (m³)</th><th style=\"text-align:right;\">ρ (t/m³)</th><th style=\"text-align:right;\">Weight (t)</th></tr></thead>
+            <tbody>${bRows}</tbody>
+            <tfoot><tr><td>Totals</td><td></td><td style=\"text-align:right;\">${bTotV.toFixed(1)}</td><td></td><td style=\"text-align:right;\">${bTotW.toFixed(1)}</td></tr></tfoot>
+          </table>
+        `;
+      }
     }
 
     // Parcels summary table
     const parcelRows = parcels.map(p => {
       const vol = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.assigned_m3,0);
       const wt = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.weight_mt,0);
+      const rhoVal = Number(p.density_kg_m3);
+      const rhoText = Number.isFinite(rhoVal) ? rhoVal.toFixed(4) : '';
       return `<tr>
         <td><span class="sw" style="display:inline-block; vertical-align:middle; margin-right:6px; background:${p.color || '#888'}"></span>${p.name}</td>
         <td>${p.id}</td>
-        <td style="text-align:right;">${p.density_kg_m3}</td>
+        <td style="text-align:right;">${rhoText}</td>
         <td style="text-align:right;">${vol.toFixed(0)}</td>
         <td style="text-align:right;">${wt.toFixed(1)}</td>
       </tr>`;
@@ -1642,7 +1710,8 @@ btnAddParcel.addEventListener('click', () => {
   // Ensure only the last parcel can be fill_remaining
   parcels = parcels.map((p, i) => i === parcels.length - 1 ? p : { ...p, fill_remaining: false });
   const idx = parcels.length + 1;
-  parcels.push({ id: `P${idx}`, name: `Parcel ${idx}`, total_m3: 0, density_kg_m3: 800, temperature_c: 15, color: '#a855f7' });
+  const color = pickNextParcelColor(parcels);
+  parcels.push({ id: `P${idx}`, name: `Parcel ${idx}`, total_m3: 0, density_kg_m3: 800, temperature_c: 15, color });
   persistLastState();
   render();
 });
