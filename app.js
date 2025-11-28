@@ -1,7 +1,7 @@
 // Dynamic cache-busted import for engine module
 const __cbParam = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
 const __ENGINE_URL = `./engine/stowage.js?cb=${__cbParam}`;
-const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK } = await import(__ENGINE_URL);
+const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK, computePlanMaxEmptySingle } = await import(__ENGINE_URL);
 const __HYDRO_URL = `./engine/hydro_shipdata.js?cb=${__cbParam}`;
 const { computeHydroShip, solveDraftByDisFWShip, interpHydroShip } = await import(__HYDRO_URL);
 
@@ -929,6 +929,10 @@ function renderSummaryAndSvg(result) {
       if (engineWarns.length) {
         html += engineWarns.map(w => `<div>${w}</div>`).join('');
       }
+      const engineErrors = Array.isArray(di.errors) ? di.errors : [];
+      if (engineErrors.length) {
+        html += engineErrors.map(e => `<div style="color:#ef4444; font-weight:600;">${e}</div>`).join('');
+      }
       // Compute requested cargo weight from parcels with specified volume
       let requested = 0;
       for (const p of parcels || []) {
@@ -1434,6 +1438,8 @@ function computeVariants() {
   const vAgg = computePlanMinTanksAggressive(tanks, parcels, policy);
   const vWing = computePlanSingleWingAlternative(tanks, parcels, policy);
   const vKeepSlopsSmall = computePlanMinKeepSlopsSmall(tanks, parcels, policy);
+  const vMaxEmptySingle = computePlanMaxEmptySingle(tanks, parcels, policy);
+  let vMaxEmptySingleBal = null;
   const altList = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
 
   // Helper: detect band underfill usage in diagnostics (disallowed for Min Trim variant)
@@ -1536,6 +1542,14 @@ function computeVariants() {
     }
   } catch {}
 
+  // Ballast optimization for single-max-empty variant
+  try {
+    if (vMaxEmptySingle && Array.isArray(vMaxEmptySingle.allocations)) {
+      const bal = optimizeBallastForTrim(vMaxEmptySingle, { rho_t_m3: 1.025, improveThreshold: 0.05 });
+      if (bal && Array.isArray(bal.ballastAllocations) && bal.ballastAllocations.length) vMaxEmptySingleBal = bal;
+    }
+  } catch {}
+
   // Only keep Even Keel if it meaningfully improves Trim vs Min Trim (or if Min Trim is absent)
   try {
     if (vEvenKeel && Array.isArray(vEvenKeel.allocations)) {
@@ -1589,6 +1603,8 @@ function computeVariants() {
 
   const candidates = {
     engine_min_k: { id: 'Engine — Max Empty Tanks', res: vMin },
+    engine_max_empty_single: vMaxEmptySingle ? { id: 'Engine — Max Empty (Single Tanks)', res: vMaxEmptySingle } : undefined,
+    engine_max_empty_single_ballast: vMaxEmptySingleBal ? { id: 'Engine — Max Empty (Single + Ballast)', res: vMaxEmptySingleBal } : undefined,
     engine_min_trim: vMinTrim ? { id: 'Engine — Min Trim (min‑k)', res: vMinTrim } : undefined,
     engine_min_trim_ballast: vMinTrimBallast ? { id: 'Engine — Min Trim (cargo+ballast)', res: vMinTrimBallast } : undefined,
     engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
@@ -1608,7 +1624,8 @@ function computeVariants() {
   
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
+    'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1643,7 +1660,8 @@ function computeVariants() {
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
-    'engine_min_k', 'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
+    'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
+    'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
@@ -1658,14 +1676,14 @@ function computeAndRender() {
   fillVariantSelect();
   let chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'];
   let res = chosen?.res || computePlan(tanks, parcels);
-  currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+  currentPlanResult = (res && Array.isArray(res.allocations) && res.allocations.length) ? res : null;
   // Fallback: if chosen is infeasible/null and All Max exists, auto-select All Max (short)
   if (!currentPlanResult && variantsCache && variantsCache['engine_all_max']) {
     selectedVariantKey = 'engine_all_max';
     if (variantSelect) variantSelect.value = 'engine_all_max';
     chosen = variantsCache['engine_all_max'];
     res = chosen?.res;
-    currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+    currentPlanResult = (res && Array.isArray(res.allocations) && res.allocations.length) ? res : null;
   }
   persistLastState();
   renderSummaryAndSvg(currentPlanResult);
@@ -1701,7 +1719,7 @@ if (variantSelect) {
     selectedVariantKey = variantSelect.value;
     const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['engine_min_k']);
     const res = chosen?.res || computePlan(tanks, parcels);
-    currentPlanResult = (res && Array.isArray(res.allocations) && !(res?.diagnostics?.errors || []).length) ? res : null;
+    currentPlanResult = (res && Array.isArray(res.allocations) && res.allocations.length) ? res : null;
     renderSummaryAndSvg(currentPlanResult);
   });
 }

@@ -1141,6 +1141,133 @@ export function computePlanMinKeepSlopsSmall(tanks, parcels, policy) {
   return computePlanInternal(tanks, parcels, 'min_k', base);
 }
 
+/**
+ * Greedy single-tank loader (ignores pair symmetry) to maximize empty cargo tanks.
+ * Sorts tanks by capacity desc, fills each parcel sequentially. Optional bandMinPct and ballast trim step.
+ * Intended as an alternative variant; preserves per-tank min/max and preloads.
+ */
+function computePlanSingleGreedy(tanks, parcels, opts = {}) {
+  try {
+    const bandEnabled = opts.bandEnabled !== false;
+    const bandMinPct = typeof opts.bandMinPct === 'number' ? opts.bandMinPct : 0.45;
+    let bandSlotsLeft = typeof opts.bandSlots === 'number' ? opts.bandSlots : 1;
+    const preloads = opts.preloads || {};
+    const effMin = (t) => Math.max(0, (t.volume_m3 * t.min_pct) - Math.max(0, preloads[t.id]?.v || 0));
+    const effMax = (t) => Math.max(0, (t.volume_m3 * t.max_pct) - Math.max(0, preloads[t.id]?.v || 0));
+
+    const included = (tanks||[]).filter(t => t && t.included && t.volume_m3 > 0);
+    // Largest first → fewer tanks used
+    const available = [...included].sort((a,b)=> (b.volume_m3*b.max_pct) - (a.volume_m3*a.max_pct) || a.id.localeCompare(b.id));
+    /** @type {Allocation[]} */
+    const allocations = [];
+    const warnings = [];
+    const errors = [];
+    /** @type {TraceEntry[]} */
+    const reasoning_trace = [];
+
+    const fixed = parcels.filter(p=>!p.fill_remaining);
+    const remaining = parcels.find(p=>p.fill_remaining);
+
+    const takeTanks = (parcel, volReq) => {
+      let rem = Math.max(0, volReq || 0);
+      const usedNow = [];
+      const rho = Number(parcel.density_kg_m3) || 0;
+      for (let i=0; i<available.length && rem>1e-9; i++) {
+        const t = available[i];
+        const minV = effMin(t);
+        const maxV = effMax(t);
+        if (maxV <= 1e-9) continue;
+        let use = Math.min(maxV, rem);
+        let usedBand = false;
+        if (use + 1e-9 < minV) {
+          const bandMinV = t.volume_m3 * bandMinPct;
+          if (bandEnabled && bandSlotsLeft > 0 && use + 1e-9 >= bandMinV) {
+            use = Math.max(use, bandMinV);
+            usedBand = true;
+          } else {
+            continue; // skip this tank; try next
+          }
+        }
+        use = Math.max(use, minV);
+        if (use > maxV + 1e-9) { use = maxV; }
+        if (use <= 1e-6) continue;
+        const fill_pct = use / t.volume_m3;
+        const weight_mt = (use * rho) / 1000.0;
+        allocations.push({ tank_id: t.id, parcel_id: parcel.id, assigned_m3: use, fill_pct, weight_mt });
+        usedNow.push(t.id);
+        rem -= use;
+        if (usedBand) {
+          bandSlotsLeft -= 1;
+          warnings.push(`Allowed underfill on ${t.id} (${(use / t.volume_m3 * 100).toFixed(1)}%) to fit ${parcel.name || parcel.id}.`);
+        }
+      }
+      const trace = {
+        parcel_id: parcel.id,
+        V: volReq,
+        Cmin: 0,
+        Cmax: 0,
+        k_low: 0,
+        k_high: 0,
+        chosen_k: usedNow.length,
+        parity_adjustment: 'none',
+        per_tank_v: usedNow.length ? (volReq / usedNow.length) : 0,
+        violates: rem > 1e-6,
+        reserved_pairs: usedNow,
+        reason: rem > 1e-6 ? 'single greedy: short vs request' : 'single greedy: max-empty'
+      };
+      reasoning_trace.push(trace);
+      // remove used tanks from availability
+      for (const id of usedNow) {
+        const idx = available.findIndex(t=>t.id===id);
+        if (idx >= 0) available.splice(idx,1);
+      }
+      return rem;
+    };
+
+    // Fixed parcels first
+    for (const p of fixed) {
+      const rem = takeTanks(p, p.total_m3 ?? 0);
+      if (rem > 1e-6) {
+        errors.push(`${p.name || p.id}: cannot be placed with current tank limits (missing ${rem.toFixed(1)} m³).`);
+      }
+    }
+    // Fill-remaining: use all remaining capacity
+    if (remaining) {
+      let totalCap = 0;
+      available.forEach(t => totalCap += effMax(t));
+      const req = Number.isFinite(remaining.total_m3) ? remaining.total_m3 : totalCap;
+      const rem = takeTanks(remaining, req);
+      if (rem > 1e-6) {
+        warnings.push(`${remaining.name || remaining.id}: requested ${req.toFixed(1)} m³ exceeds remaining capacity ${totalCap.toFixed(1)} m³ — filled all available (short).`);
+      }
+    }
+
+    // Balance stats (cargo only)
+    let port_weight_mt = 0, starboard_weight_mt = 0;
+    const byId = new Map(tanks.map(t=>[t.id,t]));
+    allocations.forEach(a => {
+      const t = byId.get(a.tank_id);
+      if (!t) return;
+      if (t.side === 'port') port_weight_mt += (a.weight_mt||0);
+      else if (t.side === 'starboard') starboard_weight_mt += (a.weight_mt||0);
+    });
+    const denom = port_weight_mt + starboard_weight_mt;
+    const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
+    const balance_status = imbalance_pct <= 10 ? 'Balanced' : 'Warning';
+    const diagnostics = { port_weight_mt, starboard_weight_mt, balance_status, imbalance_pct, reasoning_trace, warnings, errors };
+    return { allocations, diagnostics };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Max-empty variant (single greedy) optionally followed by ballast trim correction.
+ */
+export function computePlanMaxEmptySingle(tanks, parcels, policy = {}) {
+  return computePlanSingleGreedy(tanks, parcels, policy);
+}
+
 // Expert: compute plan with custom policy (e.g., relaxed band minimums for upper-bound draft solve)
 export function computePlanMinKPolicy(tanks, parcels, policy) {
   return computePlanInternal(tanks, parcels, 'min_k', policy || {});
