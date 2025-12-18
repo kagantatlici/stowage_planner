@@ -1980,10 +1980,7 @@ async function postPlanToShipData() {
     setActiveView('shipdata');
     // Ensure the iframe JS is ready; then send with retries (covers first-open race)
     await waitForIframeReady(frame, 2500);
-    const delays = [0, 250, 750, 1500];
-    delays.forEach(d => setTimeout(() => {
-      try { postShipDataMessage(frame, payload, targetOrigin); } catch {}
-    }, d));
+    try { postShipDataMessage(frame, payload, targetOrigin); } catch {}
   } catch (_) { alert('Transfer failed.'); }
 }
 
