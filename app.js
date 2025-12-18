@@ -1916,10 +1916,6 @@ async function buildShipDataTransferPayload() {
         rho
       };
     }) : [];
-    // Also provide a combined allocations list (cargo + ballast as parcel 'BALLAST') for receivers that expect a single list
-    const allocations_combined = allocs.concat(
-      ballast.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', weight_mt: b.weight_mt, assigned_m3: b.assigned_m3, fill_pct: undefined, percent: b.percent, rho: b.rho }))
-    );
     const payload = {
       type: 'apply_stowage_plan',
       version: 1,
@@ -1934,9 +1930,12 @@ async function buildShipDataTransferPayload() {
         fw: (rs && isFinite(rs.fw)) ? Number(rs.fw) : 0,
         oth: (rs && isFinite(rs.oth)) ? Number(rs.oth) : 0
       },
-      // For receivers that only read 'allocations', send combined list here too
-      allocations: allocations_combined.map(a => ({ ...a, is_ballast: a.parcel_id === 'BALLAST' })),
-      allocations_with_ballast: allocations_combined,
+      // NOTE: draft_calculator expects cargo allocations here; ballast is in ballast_allocations.
+      allocations: allocs,
+      // Extra: for other consumers that want a single list
+      allocations_with_ballast: allocs.concat(
+        ballast.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', weight_mt: b.weight_mt, assigned_m3: b.assigned_m3, fill_pct: undefined, percent: b.percent, rho: b.rho, is_ballast: true }))
+      ),
       ballast_allocations: ballast
     };
     return payload;
