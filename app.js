@@ -1864,6 +1864,8 @@ async function buildShipDataTransferPayload() {
   try {
     const res = currentPlanResult;
     if (!res || !Array.isArray(res.allocations) || res.allocations.length === 0) return null;
+    const rs = (typeof getRSInputs === 'function') ? getRSInputs() : null;
+    const rhoWater = (rs && isFinite(rs.rho) && rs.rho > 0) ? Number(rs.rho) : (typeof SHIP_PARAMS.RHO_REF === 'number' ? Number(SHIP_PARAMS.RHO_REF) : undefined);
     // Build parcel -> density (t/m³) map for quick lookup
     const rhoByParcel = new Map();
     try {
@@ -1899,7 +1901,7 @@ async function buildShipDataTransferPayload() {
     });
     const ballast = Array.isArray(res.ballastAllocations) ? res.ballastAllocations.map(b => {
       const vol = Number(b.assigned_m3)||0;
-      const rho = 1.025;
+      const rho = (rs && isFinite(rs.rho) && rs.rho > 0) ? Number(rs.rho) : 1.025;
       // try compute percent using BALLAST_TANKS cap_m3
       let pct = undefined;
       try {
@@ -1921,16 +1923,16 @@ async function buildShipDataTransferPayload() {
     const payload = {
       type: 'apply_stowage_plan',
       version: 1,
-      rho: (SHIP_PARAMS.RHO_REF != null) ? Number(SHIP_PARAMS.RHO_REF) : undefined,
+      rho: rhoWater,
       constant: {
-        w: 0,
-        x_midship_m: 0,
+        w: (rs && isFinite(rs.constW)) ? Number(rs.constW) : 0,
+        x_midship_m: (rs && isFinite(rs.constX)) ? Number(rs.constX) : 0,
         ref: 'ms_plus'
       },
       consumables: {
-        fo: 0,
-        fw: 0,
-        oth: 0
+        fo: (rs && isFinite(rs.fo)) ? Number(rs.fo) : 0,
+        fw: (rs && isFinite(rs.fw)) ? Number(rs.fw) : 0,
+        oth: (rs && isFinite(rs.oth)) ? Number(rs.oth) : 0
       },
       // For receivers that only read 'allocations', send combined list here too
       allocations: allocations_combined.map(a => ({ ...a, is_ballast: a.parcel_id === 'BALLAST' })),
@@ -1941,40 +1943,54 @@ async function buildShipDataTransferPayload() {
   } catch (_) { return null; }
 }
 
-function postPlanToShipData() {
+function postShipDataMessage(frame, payload, targetOrigin) {
+  const msg = { type: 'apply_stowage_plan', payload };
+  try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); } catch {}
+  // Also send raw payload for receivers that listen to the payload directly
+  try { frame.contentWindow.postMessage(payload, targetOrigin || '*'); } catch {}
+}
+
+function waitForIframeReady(frame, timeoutMs = 2500) {
+  return new Promise(resolve => {
+    let done = false;
+    let timeoutId = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      try { if (timeoutId) clearTimeout(timeoutId); } catch {}
+      try { frame.removeEventListener('load', finish); } catch {}
+      resolve();
+    };
+    // If same-origin and already loaded, return immediately
+    try {
+      if (frame && frame.contentDocument && frame.contentDocument.readyState === 'complete') { resolve(); return; }
+    } catch {}
+    try { frame.addEventListener('load', finish); } catch {}
+    timeoutId = setTimeout(finish, timeoutMs);
+  });
+}
+
+async function postPlanToShipData() {
   try {
     const frame = document.querySelector('#view-shipdata iframe');
     if (!frame || !frame.contentWindow) { alert('Ship Data view is not available.'); return; }
-    const payload = buildShipDataTransferPayload();
+    const payload = await buildShipDataTransferPayload();
     if (!payload) { alert('No computed allocations to transfer. Run the planner first.'); return; }
-    const msg = { type: 'apply_stowage_plan', payload };
     let targetOrigin = '*';
     try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-    try {
-      frame.contentWindow.postMessage(msg, targetOrigin || '*');
-      // Also send raw payload for receivers that listen to the payload directly
-      frame.contentWindow.postMessage(payload, targetOrigin || '*');
-    } catch (e) { /* ignore */ }
     setActiveView('shipdata');
+    // Ensure the iframe JS is ready; then send with retries (covers first-open race)
+    await waitForIframeReady(frame, 2500);
+    const delays = [0, 250, 750, 1500];
+    delays.forEach(d => setTimeout(() => {
+      try { postShipDataMessage(frame, payload, targetOrigin); } catch {}
+    }, d));
   } catch (_) { alert('Transfer failed.'); }
 }
 
 if (btnTransferShipData) {
   btnTransferShipData.addEventListener('click', async () => {
-    try {
-      const frame = document.querySelector('#view-shipdata iframe');
-      if (!frame || !frame.contentWindow) { alert('Ship Data view is not available.'); return; }
-      const payload = await buildShipDataTransferPayload();
-      if (!payload) { alert('No computed allocations to transfer. Run the planner first.'); return; }
-      const msg = { type: 'apply_stowage_plan', payload };
-      let targetOrigin = '*';
-      try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
-      try {
-        frame.contentWindow.postMessage(msg, targetOrigin || '*');
-        frame.contentWindow.postMessage(payload, targetOrigin || '*');
-      } catch (e) { /* ignore */ }
-      setActiveView('shipdata');
-    } catch (_) { alert('Transfer failed.'); }
+    try { await postPlanToShipData(); } catch { alert('Transfer failed.'); }
   });
 }
 
