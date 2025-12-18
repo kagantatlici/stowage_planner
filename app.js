@@ -123,7 +123,7 @@ const APP_BUILD = (() => {
     const cb = qs.get('cb') || null;
     return {
       app: 'stowage_planner',
-      build_tag: 'min-trim-v2',
+      build_tag: 'min-trim-v3-dmax',
       cb,
       loaded_at: new Date().toISOString(),
       features: {
@@ -132,6 +132,7 @@ const APP_BUILD = (() => {
         hydro_interp_safe: true,
         min_trim_selector: true,
         even_keel_variant: true,
+        target_draft_is_dmax: true,
         over_capacity_fallbacks: true
       }
     };
@@ -139,6 +140,11 @@ const APP_BUILD = (() => {
     return { app: 'stowage_planner', build_tag: 'simple-hydro-summary', loaded_at: new Date().toISOString() };
   }
 })();
+
+function maxDraftOf(h) {
+  if (!h) return Infinity;
+  return Math.max(Number(h.Tf) || 0, Number(h.Tm) || 0, Number(h.Ta) || 0);
+}
 
 
 // ---- Evenkeel helper (local) ----
@@ -1654,6 +1660,22 @@ function computeVariants() {
       if (minKKey === minTrimKey) delete out['engine_min_k'];
     }
   } catch {}
+
+  // If Target Draft is enabled, only keep variants that satisfy max(F/M/A) <= target.
+  try {
+    const targetDraft = getTargetDraftMax();
+    if (Number.isFinite(targetDraft) && targetDraft > 0 && Array.isArray(HYDRO_ROWS) && HYDRO_ROWS.length > 0 && TANK_LCG_MAP && TANK_LCG_MAP.size > 0) {
+      const eps = 1e-3;
+      const filtered = {};
+      for (const [k, entry] of Object.entries(out)) {
+        const h = computeHydroForResult(entry?.res);
+        const mx = maxDraftOf(h);
+        if (Number.isFinite(mx) && mx <= targetDraft + eps) filtered[k] = entry;
+      }
+      if (Object.keys(filtered).length > 0) return filtered;
+      return {};
+    }
+  } catch {}
   return out;
 }
 
@@ -1667,6 +1689,12 @@ function fillVariantSelect() {
   ];
   const opts = order.filter(k => variantsCache[k])
     .map(k => ({ key: k, label: variantsCache[k].id }));
+  if (opts.length === 0) {
+    variantSelect.innerHTML = '<option>No feasible plan</option>';
+    variantSelect.disabled = true;
+    return;
+  }
+  variantSelect.disabled = false;
   if (!opts.find(o => o.key === selectedVariantKey)) selectedVariantKey = opts[0]?.key || 'engine_min_k';
   variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key===selectedVariantKey?'selected':''}>${o.label}</option>`).join('');
 }
@@ -1674,8 +1702,16 @@ function fillVariantSelect() {
 function computeAndRender() {
   variantsCache = computeVariants();
   fillVariantSelect();
-  let chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'];
-  let res = chosen?.res || computePlan(tanks, parcels);
+  const keys = variantsCache ? Object.keys(variantsCache) : [];
+  if (!keys.length) {
+    currentPlanResult = null;
+    persistLastState();
+    renderSummaryAndSvg(null);
+    if (warnsEl) warnsEl.innerHTML = '<div style="color:#ef4444; font-weight:600;">No feasible plan under Target Max Draft. Lower cargo or increase the target.</div>';
+    return;
+  }
+  let chosen = variantsCache[selectedVariantKey] || variantsCache['engine_min_k'] || variantsCache[keys[0]];
+  let res = chosen?.res;
   currentPlanResult = (res && Array.isArray(res.allocations) && res.allocations.length) ? res : null;
   // Fallback: if chosen is infeasible/null and All Max exists, auto-select All Max (short)
   if (!currentPlanResult && variantsCache && variantsCache['engine_all_max']) {
@@ -1718,7 +1754,7 @@ if (variantSelect) {
   variantSelect.addEventListener('change', () => {
     selectedVariantKey = variantSelect.value;
     const chosen = variantsCache && (variantsCache[selectedVariantKey] || variantsCache['engine_min_k']);
-    const res = chosen?.res || computePlan(tanks, parcels);
+    const res = chosen?.res;
     currentPlanResult = (res && Array.isArray(res.allocations) && res.allocations.length) ? res : null;
     renderSummaryAndSvg(currentPlanResult);
   });
@@ -2641,6 +2677,34 @@ function updateMaxCargoView() {
     LAST_MAX_CARGO_MT = null;
     if (!rsMaxCargoEl) return;
     if (rsEnableEl && !rsEnableEl.checked) { rsMaxCargoEl.textContent = 'Max cargo: — mt'; return; }
+
+    const targetDraft = getTargetDraftMax();
+    const canDmax = Number.isFinite(targetDraft) && targetDraft > 0
+      && Array.isArray(HYDRO_ROWS) && HYDRO_ROWS.length > 0
+      && (TANK_LCG_MAP && TANK_LCG_MAP.size > 0);
+    const hasFR = Array.isArray(parcels) && parcels.some(p => !!p.fill_remaining);
+    if (canDmax && hasFR) {
+      const best = solveFillRemainingForTargetDmax(targetDraft);
+      if (best && Number.isFinite(best.cargo_mt)) {
+        LAST_MAX_CARGO_MT = best.cargo_mt;
+        rsMaxCargoEl.textContent = `Max cargo @ Dmax: ${best.cargo_mt.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
+        const idx = parcels.findIndex(pp => !!pp.fill_remaining);
+        if (idx >= 0) {
+          const cur = Number(parcels[idx]?.total_m3);
+          const want = Number(best.fr_volume_m3);
+          if (!Number.isFinite(cur) || !Number.isFinite(want) || Math.abs(cur - want) > 1e-3) {
+            parcels[idx] = { ...parcels[idx], total_m3: want };
+            persistLastState();
+            render();
+          }
+        }
+        return;
+      }
+      rsMaxCargoEl.textContent = 'Max cargo @ Dmax: — mt';
+      return;
+    }
+
+    // Fallback (mean-draft capacity estimate): use hydro displacement at target draft and subtract known weights.
     const { T, rho, fo, fw, oth, constW } = getRSInputs();
     if (!Array.isArray(HYDRO_ROWS) || HYDRO_ROWS.length === 0 || !Number.isFinite(T)) {
       rsMaxCargoEl.textContent = 'Max cargo: — mt';
@@ -2664,7 +2728,7 @@ function updateMaxCargoView() {
     const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0) + preW;
     const cargoMax = Math.max(0, W_dis - others);
     LAST_MAX_CARGO_MT = cargoMax;
-    rsMaxCargoEl.textContent = `Max cargo: ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
+    rsMaxCargoEl.textContent = `Max cargo (mean): ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
     // keep FR parcel in sync if exists
     const changed = updateFRParcelFromInputs();
     if (changed) { persistLastState(); render(); }
@@ -2769,11 +2833,22 @@ function computeHydroForAllocations(allocations) {
       if (isFinite(rs.constX)) constX = Number(rs.constX);
     }
   } catch {}
+  // Use user-provided water density if available; else fall back to ship's ref density
+  let rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
+  try { const rs = getRSInputs ? getRSInputs() : null; if (rs && isFinite(rs.rho) && rs.rho > 0) rho_ref = Number(rs.rho); } catch {}
   let W = 0, Mx = 0;
   const LCG_BIAS = getLCGBias();
+  const ballastIdSet = new Set((BALLAST_TANKS || []).map(t => t && t.id).filter(Boolean));
   // cargo + ballast allocations
   allocations.forEach(a => {
-    const w = a.weight_mt || 0;
+    let w = Number(a?.weight_mt);
+    if (!Number.isFinite(w)) {
+      const v = Number(a?.assigned_m3);
+      const pid = String(a?.parcel_id || '');
+      const isBallast = pid.toUpperCase() === 'BALLAST' || ballastIdSet.has(String(a?.tank_id || ''));
+      if (Number.isFinite(v) && v > 0 && isBallast) w = v * rho_ref;
+      else w = 0;
+    }
     let x0 = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : NaN;
     if (!isFinite(x0)) {
       try { const bt = (BALLAST_TANKS||[]).find(t=>t.id===a.tank_id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch {}
@@ -2828,12 +2903,108 @@ function computeHydroForAllocations(allocations) {
   if (!(W > 0)) return null;
   const LCG = Mx / W;
   const rowsUse = HYDRO_ROWS;
-  // Use user-provided water density if available; else fall back to ship's ref density
-  let rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
-  try { const rs = getRSInputs ? getRSInputs() : null; if (rs && isFinite(rs.rho) && rs.rho > 0) rho_ref = Number(rs.rho); } catch {}
   const LBP = (typeof SHIP_PARAMS.LBP === 'number' && SHIP_PARAMS.LBP > 0) ? SHIP_PARAMS.LBP : null;
   const Hship = computeHydroShip(rowsUse, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
   return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP? (LBP/2)+(Hship.LCF||0):undefined), dFP: (LBP? (LBP/2)-(Hship.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
+}
+
+function getTargetDraftMax() {
+  try {
+    if (!rsEnableEl || !rsEnableEl.checked) return NaN;
+    const rs = getRSInputs ? getRSInputs() : null;
+    const t = rs ? Number(rs.T) : NaN;
+    return (Number.isFinite(t) && t > 0) ? t : NaN;
+  } catch { return NaN; }
+}
+
+function getWaterDensity() {
+  try {
+    const rs = getRSInputs ? getRSInputs() : null;
+    const rho = rs ? Number(rs.rho) : NaN;
+    if (Number.isFinite(rho) && rho > 0) return rho;
+  } catch {}
+  const rhoRef = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : NaN;
+  return Number.isFinite(rhoRef) ? rhoRef : 1.025;
+}
+
+function computeHydroForResult(res) {
+  try {
+    if (!res || !Array.isArray(res.allocations)) return null;
+    const rho = getWaterDensity();
+    const ballast = (res.ballastAllocations || res.ballast_allocations) || [];
+    const ballastAsAllocs = (ballast || []).map(b => {
+      const v = Number(b?.assigned_m3) || 0;
+      const w = Number(b?.weight_mt);
+      return { tank_id: b?.tank_id, parcel_id: 'BALLAST', assigned_m3: v, weight_mt: Number.isFinite(w) ? w : (v * rho), fill_pct: 0 };
+    });
+    return computeHydroForAllocations([...(res.allocations || []), ...ballastAsAllocs]);
+  } catch { return null; }
+}
+
+function cargoWeightMT(res) {
+  try { return (res?.allocations || []).reduce((s,a)=> s + (Number(a?.weight_mt) || 0), 0); } catch { return 0; }
+}
+
+function cloneParcels(ps) {
+  return (ps || []).map(p => ({ ...p }));
+}
+
+function computeVariantsForParcels(tempParcels) {
+  const old = parcels;
+  parcels = tempParcels;
+  try { return computeVariants(); } finally { parcels = old; }
+}
+
+function pickBestVariantUnderDmax(variants, targetDraft) {
+  if (!variants || !Number.isFinite(targetDraft) || targetDraft <= 0) return null;
+  const eps = 1e-3;
+  let best = null;
+  for (const [key, entry] of Object.entries(variants)) {
+    const res = entry?.res;
+    if (!res || !Array.isArray(res.allocations)) continue;
+    const h = computeHydroForResult(res);
+    const maxT = maxDraftOf(h);
+    if (!(Number.isFinite(maxT) && maxT <= targetDraft + eps)) continue;
+    const cw = cargoWeightMT(res);
+    if (!best || cw > best.cargo_mt) best = { key, entry, res, hydro: h, max_draft: maxT, cargo_mt: cw };
+  }
+  return best;
+}
+
+function solveFillRemainingForTargetDmax(targetDraft) {
+  try {
+    if (!Number.isFinite(targetDraft) || targetDraft <= 0) return null;
+    if (!Array.isArray(tanks) || tanks.length === 0) return null;
+    if (!Array.isArray(parcels) || parcels.length === 0) return null;
+    if (!HYDRO_ROWS || HYDRO_ROWS.length === 0) return null;
+
+    const frIdx = parcels.findIndex(p => !!p.fill_remaining);
+    if (frIdx < 0) return null;
+    const baseParcels = cloneParcels(parcels);
+    // Upper bound: total cargo Cmax across included tanks
+    const capM3 = (tanks || [])
+      .filter(t => t && (t.included !== false))
+      .reduce((s,t)=> s + (Number(t.volume_m3)||0) * (Number(t.max_pct)||0), 0);
+    let lo = 0;
+    let hi = Number.isFinite(capM3) && capM3 > 0 ? capM3 : Math.max(0, Number(baseParcels[frIdx]?.total_m3) || 0);
+    if (!(hi > 0)) hi = Math.max(1, Number(baseParcels[frIdx]?.total_m3) || 1);
+
+    let best = null;
+    for (let it = 0; it < 18; it++) {
+      const mid = (lo + hi) / 2;
+      const testParcels = cloneParcels(baseParcels);
+      testParcels[frIdx] = { ...testParcels[frIdx], total_m3: mid };
+      const variants = computeVariantsForParcels(testParcels);
+      const pick = pickBestVariantUnderDmax(variants, targetDraft);
+      if (pick) {
+        best = { ...pick, fr_volume_m3: mid };
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    return best;
+  } catch { return null; }
 }
