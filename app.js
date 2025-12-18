@@ -1586,6 +1586,142 @@ function computeVariants() {
     }
   } catch {}
 
+  // Target Dmax helper: enumerate additional cargo-only subset plans under Dmax.
+  // This helps surface feasible variants between min-k and all-tanks even-keel (e.g., the manual 19,303t case).
+  /** @type {{id:string,res:any}[]} */
+  let vDmaxSubset = [];
+  try {
+    const targetDraft = getTargetDraftMax();
+    const canDmax = Number.isFinite(targetDraft) && targetDraft > 0
+      && Array.isArray(HYDRO_ROWS) && HYDRO_ROWS.length > 0
+      && (TANK_LCG_MAP && TANK_LCG_MAP.size > 0);
+    const fixedParcels = (parcels || []).filter(p => !p.fill_remaining);
+    const hasFR = (parcels || []).some(p => !!p.fill_remaining);
+    if (canDmax && !hasFR && fixedParcels.length === 1) {
+      const targetParcel = fixedParcels[0];
+      const V = Number(targetParcel?.total_m3);
+      if (Number.isFinite(V) && V > 0) {
+        // Collect available symmetric pair indices (including SLOPs as 1000)
+        const pairMap = new Map(); // idx -> {P:boolean,S:boolean}
+        (tanks || [])
+          .filter(t => t && t.included && (t.side === 'port' || t.side === 'starboard'))
+          .forEach(t => {
+            const idx = uiPairIndex(t.id);
+            if (idx == null) return;
+            const ent = pairMap.get(idx) || { P: false, S: false };
+            if (t.side === 'port') ent.P = true;
+            if (t.side === 'starboard') ent.S = true;
+            pairMap.set(idx, ent);
+          });
+        const allPairs = Array.from(pairMap.entries())
+          .filter(([_, ent]) => ent && ent.P && ent.S)
+          .map(([idx]) => idx)
+          .sort((a, b) => a - b);
+        const n = allPairs.length;
+        if (n > 0) {
+          const eps = 1e-3;
+          // Mid-only contiguous block filter (mirror engine heuristic; ignore SLOPs)
+          const cotIdxs = allPairs.filter(i => i < 1000);
+          const minCot = cotIdxs.length ? Math.min(...cotIdxs) : 0;
+          const maxCot = cotIdxs.length ? Math.max(...cotIdxs) : 0;
+          const isMidOnlyContiguousBlock = (picked) => {
+            const cot = (picked || []).filter(i => i < 1000);
+            if (!cot.length) return false;
+            const set = new Set(cot);
+            const minSel = Math.min(...cot);
+            const maxSel = Math.max(...cot);
+            for (let i = minSel; i <= maxSel; i++) if (!set.has(i)) return false;
+            return (minSel > minCot && maxSel < maxCot);
+          };
+          const labelForPairs = (picked) => {
+            const parts = (picked || [])
+              .slice()
+              .sort((a, b) => a - b)
+              .map(i => (i >= 1000 ? 'SLOP' : `COT${i}`));
+            return parts.join('+');
+          };
+          const sig = (res) => {
+            try {
+              return (res?.allocations || [])
+                .map(a => `${a.tank_id}:${(Number(a.assigned_m3) || 0).toFixed(2)}`)
+                .sort()
+                .join('|');
+            } catch { return ''; }
+          };
+          const seen = new Set();
+          const results = [];
+          // Enumerate subsets via bitmask (fast for typical pair counts)
+          const maxMasks = (n <= 16) ? ((1 << n) - 1) : 0;
+          const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const timeBudgetMs = 120; // keep UI responsive
+          const considerSubset = (picked) => {
+            if (!picked || picked.length === 0) return;
+            if (isMidOnlyContiguousBlock(picked)) return;
+            const fpol = {
+              forcedSelection: { [targetParcel.id]: { reservedPairs: picked, center: null } },
+              preloads: (policy && policy.preloads) || {}
+            };
+            const base = computePlanMinKPolicy(tanks, parcels, fpol);
+            if (!base || !Array.isArray(base.allocations) || base.allocations.length === 0) return;
+            if ((base?.diagnostics?.errors || []).length) return;
+            if (usedBand(base)) return;
+            // Intra-selection trim optimization; include SLOPs in optimizer only when used
+            const opt = optimizeTrimWithinSelection(base, { includeSlops: picked.some(i => i >= 1000) }) || base;
+            if (!opt || !Array.isArray(opt.allocations) || opt.allocations.length === 0) return;
+            const h = computeHydroForResult(opt);
+            const mx = maxDraftOf(h);
+            if (!(Number.isFinite(mx) && mx <= targetDraft + eps)) return;
+            const s = sig(opt);
+            if (!s || seen.has(s)) return;
+            seen.add(s);
+            const trimAbs = h && Number.isFinite(h.Trim) ? Math.abs(Number(h.Trim)) : Infinity;
+            results.push({
+              res: opt,
+              picked,
+              cargo: loadedTons(opt),
+              tanksUsed: opt.allocations.length,
+              trimAbs,
+              maxDraft: mx
+            });
+          };
+          if (maxMasks > 0) {
+            for (let mask = 1; mask <= maxMasks; mask++) {
+              const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+              if (now - t0 > timeBudgetMs) break;
+              const picked = [];
+              for (let i = 0; i < n; i++) if (mask & (1 << i)) picked.push(allPairs[i]);
+              considerSubset(picked);
+            }
+          } else {
+            // Fallback for large N: sample by increasing subset size up to a sane cap
+            const capPairs = Math.min(n, 12);
+            const combos = function* (arr, k, start = 0, prefix = []) {
+              if (k === 0) { yield prefix; return; }
+              for (let i = start; i <= arr.length - k; i++) yield* combos(arr, k - 1, i + 1, prefix.concat(arr[i]));
+            };
+            for (let k = 1; k <= capPairs; k++) {
+              for (const picked of combos(allPairs, k)) {
+                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                if (now - t0 > timeBudgetMs) break;
+                considerSubset(picked);
+              }
+            }
+          }
+          results.sort((a, b) =>
+            (b.cargo - a.cargo) ||
+            (a.tanksUsed - b.tanksUsed) ||
+            (a.trimAbs - b.trimAbs) ||
+            (b.maxDraft - a.maxDraft)
+          );
+          vDmaxSubset = results.slice(0, 5).map((r, i) => ({
+            id: `Engine — Dmax Alt ${i + 1} (${labelForPairs(r.picked)})`,
+            res: r.res
+          }));
+        }
+      }
+    }
+  } catch {}
+
   function planSig(res) {
     if (!res || !Array.isArray(res.allocations)) return '';
     const cargoSig = res.allocations
@@ -1632,6 +1768,8 @@ function computeVariants() {
     engine_min_trim_ballast: vMinTrimBallast ? { id: 'Engine — Min Trim (cargo+ballast)', res: vMinTrimBallast } : undefined,
     engine_min_trim_alt_1: vMinTrimAlts[0] ? { id: 'Engine — Min Trim Alt 1', res: vMinTrimAlts[0] } : undefined,
     engine_min_trim_alt_2: vMinTrimAlts[1] ? { id: 'Engine — Min Trim Alt 2', res: vMinTrimAlts[1] } : undefined,
+    // Dmax-feasible subset variants (cargo-only)
+    ...Object.fromEntries((vDmaxSubset || []).map((e, i) => [`engine_dmax_${i + 1}`, e])),
     engine_even_keel: vEvenKeelUse ? { id: 'Engine — Even Keel (all tanks)', res: vEvenKeelUse } : undefined,
     engine_keep_slops_small: { id: 'Engine — Min Tanks (Keep SLOPs Small)', res: vKeepSlopsSmall },
     engine_all_max: (vAllMax && requestedTons > 0 && (loadedTons(vAllMax) + 0.1 < requestedTons)) ? { id: 'Engine — All Max (short)', res: vAllMax } : undefined,
@@ -1701,7 +1839,9 @@ function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
     'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
-    'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
+    'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2',
+    'engine_dmax_1', 'engine_dmax_2', 'engine_dmax_3', 'engine_dmax_4', 'engine_dmax_5',
+    'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
     'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
   ];
