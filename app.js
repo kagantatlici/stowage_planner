@@ -1452,9 +1452,16 @@ function computeVariants() {
   let simplePlans = [];
   try {
     simplePlans = computeAllViablePlansSimple(tanks, parcels, policy) || [];
-    console.log(`Simple brute-force found ${simplePlans.length} feasible combinations`);
+    console.log(`[SIMPLE] Brute-force found ${simplePlans.length} feasible combinations`);
+    if (simplePlans.length > 0) {
+      console.log(`[SIMPLE] First 3 options:`, simplePlans.slice(0, 3).map(p => ({
+        label: p.label,
+        tanks: p.metrics?.tanksUsed,
+        empty: p.metrics?.emptyTankCount
+      })));
+    }
   } catch (e) {
-    console.warn('Simple brute-force failed:', e);
+    console.error('[SIMPLE] Brute-force failed:', e);
   }
 
 
@@ -1847,18 +1854,33 @@ function computeVariants() {
   // If Target Draft is enabled, only keep variants that satisfy max(F/M/A) <= target.
   try {
     const targetDraft = getTargetDraftMax();
+    console.log(`[FILTER] Target draft: ${targetDraft}, HYDRO_ROWS: ${HYDRO_ROWS?.length || 0}, TANK_LCG_MAP: ${TANK_LCG_MAP?.size || 0}`);
+    console.log(`[FILTER] Total variants before filter: ${Object.keys(out).length}`);
+
     if (Number.isFinite(targetDraft) && targetDraft > 0 && Array.isArray(HYDRO_ROWS) && HYDRO_ROWS.length > 0 && TANK_LCG_MAP && TANK_LCG_MAP.size > 0) {
       const eps = 1e-3;
       const filtered = {};
+      let passCount = 0, failCount = 0;
       for (const [k, entry] of Object.entries(out)) {
         const h = computeHydroForResult(entry?.res);
         const mx = maxDraftOf(h);
-        if (Number.isFinite(mx) && mx <= targetDraft + eps) filtered[k] = entry;
+        if (Number.isFinite(mx) && mx <= targetDraft + eps) {
+          filtered[k] = entry;
+          passCount++;
+        } else {
+          failCount++;
+          if (k.startsWith('simple_')) {
+            console.log(`[FILTER] REJECTED ${k}: maxDraft=${mx?.toFixed(3)} > target=${targetDraft}`);
+          }
+        }
       }
+      console.log(`[FILTER] After filter: ${passCount} passed, ${failCount} rejected`);
       if (Object.keys(filtered).length > 0) return filtered;
       return {};
     }
-  } catch { }
+  } catch (e) {
+    console.error('[FILTER] Error:', e);
+  }
   return out;
 }
 
