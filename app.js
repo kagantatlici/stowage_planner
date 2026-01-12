@@ -1,7 +1,7 @@
 // Dynamic cache-busted import for engine module
 const __cbParam = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
 const __ENGINE_URL = `./engine/stowage.js?cb=${__cbParam}`;
-const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK, computePlanMaxEmptySingle, computeAllViablePlans } = await import(__ENGINE_URL);
+const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK, computePlanMaxEmptySingle, computeAllViablePlans, computeAllViablePlansSimple } = await import(__ENGINE_URL);
 const __HYDRO_URL = `./engine/hydro_shipdata.js?cb=${__cbParam}`;
 const { computeHydroShip, solveDraftByDisFWShip, interpHydroShip } = await import(__HYDRO_URL);
 
@@ -1448,16 +1448,13 @@ function computeVariants() {
   let vMaxEmptySingleBal = null;
   const altList = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
 
-  // === EXHAUSTIVE SEARCH: Pareto-optimal plans ===
-  let exhaustivePlans = [];
+  // === SIMPLE BRUTE-FORCE: All feasible combinations (no filtering) ===
+  let simplePlans = [];
   try {
-    exhaustivePlans = computeAllViablePlans(tanks, parcels, policy, {
-      timeBudgetMs: 200,
-      maxResults: 500,
-      topN: 10
-    }) || [];
+    simplePlans = computeAllViablePlansSimple(tanks, parcels, policy) || [];
+    console.log(`Simple brute-force found ${simplePlans.length} feasible combinations`);
   } catch (e) {
-    console.warn('Exhaustive search failed:', e);
+    console.warn('Simple brute-force failed:', e);
   }
 
 
@@ -1791,13 +1788,14 @@ function computeVariants() {
       `engine_alt_${i + 1}`,
       { id: `Engine — Min Tanks Alt ${i + 1}`, res: r }
     ])),
-    // === EXHAUSTIVE PARETO-OPTIMAL PLANS ===
-    ...Object.fromEntries(exhaustivePlans.map((p, i) => {
+    // === SIMPLE BRUTE-FORCE: All feasible combinations ===
+    ...Object.fromEntries(simplePlans.map((p, i) => {
       const m = p.metrics || {};
       const label = m.label || `Option ${i + 1}`;
-      const hint = `${m.emptyTankCount ?? '?'} empty | ${(m.deadSpace ?? 0).toFixed(0)}m³ dead`;
-      return [`pareto_${i + 1}`, {
-        id: `Pareto ${i + 1}: ${label} (${hint})`,
+      const tanksUsed = m.tanksUsed ?? '?';
+      const emptyCount = m.emptyTankCount ?? '?';
+      return [`simple_${i + 1}`, {
+        id: `${label} (${tanksUsed} tanks, ${emptyCount} empty)`,
         res: p
       }];
     })),
@@ -1808,12 +1806,15 @@ function computeVariants() {
 
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
+    // Simple brute-force results first (sorted by tank count)
+    'simple_1', 'simple_2', 'simple_3', 'simple_4', 'simple_5',
+    'simple_6', 'simple_7', 'simple_8', 'simple_9', 'simple_10',
+    'simple_11', 'simple_12', 'simple_13', 'simple_14', 'simple_15',
+    'simple_16', 'simple_17', 'simple_18', 'simple_19', 'simple_20',
+    // Legacy engine variants
     'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
     'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1', 'engine_alt_2', 'engine_alt_3', 'engine_alt_4', 'engine_alt_5',
-    // Exhaustive Pareto-optimal plans
-    'pareto_1', 'pareto_2', 'pareto_3', 'pareto_4', 'pareto_5',
-    'pareto_6', 'pareto_7', 'pareto_8', 'pareto_9', 'pareto_10',
     'engine_single_wing',
     'engine_min_k_aggressive', 'engine_max_remaining'
   ];
@@ -1864,14 +1865,17 @@ function computeVariants() {
 function fillVariantSelect() {
   if (!variantSelect || !variantsCache) return;
   const order = [
+    // Simple brute-force results first (sorted by tank count)
+    'simple_1', 'simple_2', 'simple_3', 'simple_4', 'simple_5',
+    'simple_6', 'simple_7', 'simple_8', 'simple_9', 'simple_10',
+    'simple_11', 'simple_12', 'simple_13', 'simple_14', 'simple_15',
+    'simple_16', 'simple_17', 'simple_18', 'simple_19', 'simple_20',
+    // Legacy engine variants
     'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
     'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2',
     'engine_dmax_1', 'engine_dmax_2', 'engine_dmax_3', 'engine_dmax_4', 'engine_dmax_5',
     'engine_even_keel', 'engine_keep_slops_small',
     'engine_alt_1', 'engine_alt_2', 'engine_alt_3', 'engine_alt_4', 'engine_alt_5',
-    // Exhaustive Pareto-optimal plans
-    'pareto_1', 'pareto_2', 'pareto_3', 'pareto_4', 'pareto_5',
-    'pareto_6', 'pareto_7', 'pareto_8', 'pareto_9', 'pareto_10',
     'engine_single_wing', 'engine_min_k_aggressive', 'engine_max_remaining'
   ];
   const opts = order.filter(k => variantsCache[k])
