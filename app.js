@@ -1,7 +1,7 @@
 // Dynamic cache-busted import for engine module
 const __cbParam = (new URLSearchParams(location.search).get('cb')) || Date.now().toString();
 const __ENGINE_URL = `./engine/stowage.js?cb=${__cbParam}`;
-const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK, computePlanMaxEmptySingle } = await import(__ENGINE_URL);
+const { buildDefaultTanks, buildT10Tanks, computePlan, computePlanMaxRemaining, computePlanMinTanksAggressive, computePlanSingleWingAlternative, computePlanMinKAlternatives, computePlanMinKeepSlopsSmall, computePlanMinKPolicy, computePlanMaxK, computePlanMaxEmptySingle, computeAllViablePlans } = await import(__ENGINE_URL);
 const __HYDRO_URL = `./engine/hydro_shipdata.js?cb=${__cbParam}`;
 const { computeHydroShip, solveDraftByDisFWShip, interpHydroShip } = await import(__HYDRO_URL);
 
@@ -16,13 +16,13 @@ let HYDRO_META = null; // optional meta: source, units, rowsCount
 const LS_LCG_BIAS = 'stowage_lcg_bias_v1';
 function getLCGBias() {
   try {
-    const qs = new URLSearchParams(location.search||'');
+    const qs = new URLSearchParams(location.search || '');
     if (qs.has('lcg_bias')) return Number(qs.get('lcg_bias')) || 0;
-  } catch {}
-  try { const s = localStorage.getItem(LS_LCG_BIAS); if (s!=null) return Number(s)||0; } catch {}
+  } catch { }
+  try { const s = localStorage.getItem(LS_LCG_BIAS); if (s != null) return Number(s) || 0; } catch { }
   return 0;
 }
-function setLCGBias(v) { try { localStorage.setItem(LS_LCG_BIAS, String(v)); } catch {} }
+function setLCGBias(v) { try { localStorage.setItem(LS_LCG_BIAS, String(v)); } catch { } }
 /** @type {Map<string, number>} */
 let TANK_LCG_MAP = new Map(); // map tank_id -> lcg (midship +forward)
 /** Ballast tanks metadata imported from Ship Data (if available) */
@@ -85,7 +85,7 @@ if (btnSolveDraft) {
 }
 
 // Initialize Target Draft toggle UI state
-try { if (typeof applyDraftToggleUI === 'function') applyDraftToggleUI(); } catch {}
+try { if (typeof applyDraftToggleUI === 'function') applyDraftToggleUI(); } catch { }
 
 const hydroSummaryEl = document.getElementById('hydro-summary');
 
@@ -149,14 +149,14 @@ function maxDraftOf(h) {
 
 // ---- Evenkeel helper (local) ----
 function cotPairIndex(id) {
-  const m = /COT(\d+)/i.exec(String(id||''));
-  return m ? parseInt(m[1],10) : null;
+  const m = /COT(\d+)/i.exec(String(id || ''));
+  return m ? parseInt(m[1], 10) : null;
 }
 function persistCfgName() {
-  try { if (cfgNameInput) localStorage.setItem(LS_CFG_NAME, String(cfgNameInput.value ?? '')); } catch {}
+  try { if (cfgNameInput) localStorage.setItem(LS_CFG_NAME, String(cfgNameInput.value ?? '')); } catch { }
 }
 function restoreCfgName() {
-  try { const v = localStorage.getItem(LS_CFG_NAME); if (cfgNameInput && v != null) cfgNameInput.value = v; } catch {}
+  try { const v = localStorage.getItem(LS_CFG_NAME); if (cfgNameInput && v != null) cfgNameInput.value = v; } catch { }
 }
 
 function loadPresets() {
@@ -175,11 +175,11 @@ function refreshPresetSelect() {
   const options = [];
   try {
     const presets = loadPresets();
-    const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
+    const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
     names.forEach(n => {
       options.push({ value: `preset:${n}`, label: n });
     });
-  } catch {}
+  } catch { }
   cfgSelect.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
 }
 
@@ -191,9 +191,9 @@ function applySelectionValue(value) {
     const conf = presets[name];
     if (!Array.isArray(conf)) return false;
     tanks = conf.map(t => ({ ...t }));
-    try { cfgNameInput.value = name; } catch {}
+    try { cfgNameInput.value = name; } catch { }
     // Apply ship meta for this preset if available
-    try { const meta = (typeof loadShipMeta === 'function') ? loadShipMeta()[name] : null; if (meta) applyShipMeta(meta); } catch {}
+    try { const meta = (typeof loadShipMeta === 'function') ? loadShipMeta()[name] : null; if (meta) applyShipMeta(meta); } catch { }
     persistLastState();
     render();
     return true;
@@ -214,7 +214,7 @@ function restoreLastState() {
       parcels = p;
       restored = true;
     }
-  } catch {}
+  } catch { }
   return restored;
 }
 
@@ -338,10 +338,10 @@ function extractCargoArray(profile) {
 }
 
 function clearImportedShips() {
-  try { localStorage.removeItem(LS_PRESETS); } catch {}
-  try { localStorage.removeItem(LS_SHIP_META); } catch {}
-  try { localStorage.removeItem(LS_BALLAST_META); } catch {}
-  try { localStorage.removeItem(LS_LAST); } catch {}
+  try { localStorage.removeItem(LS_PRESETS); } catch { }
+  try { localStorage.removeItem(LS_SHIP_META); } catch { }
+  try { localStorage.removeItem(LS_BALLAST_META); } catch { }
+  try { localStorage.removeItem(LS_LAST); } catch { }
   SHIP_PARAMS.LBP = null;
   SHIP_PARAMS.RHO_REF = null;
   SHIP_PARAMS.LCG_FO_FW = null;
@@ -374,8 +374,8 @@ function buildVolumeMapFromJSON(json) {
       const id = item.id || item.tank_id;
       const vol = (typeof item.volume_m3 === 'number') ? item.volume_m3
         : (typeof item.capacity_m3 === 'number') ? item.capacity_m3
-        : (typeof item.volume === 'number') ? item.volume
-        : undefined;
+          : (typeof item.volume === 'number') ? item.volume
+            : undefined;
       if (id && typeof vol === 'number') volumeMap.set(id, vol);
     });
   };
@@ -427,8 +427,8 @@ function convertLongitudinalToMidship(x, lbp, ref) {
   if (!r || r === 'ms_plus') return x;      // midship (+ forward)
   if (r === 'ms_minus') return -x;          // midship (− forward)
   if (!isFinite(lbp) || lbp <= 0) return x; // AP/FP need LBP
-  if (r === 'ap_plus') return x - lbp/2;    // AP (+ forward) → midship
-  if (r === 'fp_minus') return x + lbp/2;   // FP (− aft) → midship
+  if (r === 'ap_plus') return x - lbp / 2;    // AP (+ forward) → midship
+  if (r === 'fp_minus') return x + lbp / 2;   // FP (− aft) → midship
   return x;
 }
 
@@ -445,7 +445,7 @@ function convertProfileLongitudes(profile) {
       }
     }
     // Tank LCGs
-    const cats = ['cargo','ballast','consumables'];
+    const cats = ['cargo', 'ballast', 'consumables'];
     if (profile.tanks) {
       for (const c of cats) {
         const arr = profile.tanks[c];
@@ -463,7 +463,7 @@ function convertProfileLongitudes(profile) {
     if (profile.ship && profile.ship.constant && typeof profile.ship.constant.lcg === 'number') {
       profile.ship.constant.lcg = convertLongitudinalToMidship(profile.ship.constant.lcg, lbp, ref);
     }
-  } catch {}
+  } catch { }
   return profile;
 }
 
@@ -485,9 +485,9 @@ function extractShipMetaFromProfile(profile) {
     }
     // Hydro rows (accept both {rows:[]} and [] shapes)
     if (p.hydrostatics && Array.isArray(p.hydrostatics.rows)) {
-      meta.hydrostatics = { rows: p.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m) };
+      meta.hydrostatics = { rows: p.hydrostatics.rows.slice().sort((a, b) => a.draft_m - b.draft_m) };
     } else if (Array.isArray(p.hydrostatics)) {
-      meta.hydrostatics = { rows: p.hydrostatics.slice().sort((a,b)=>a.draft_m-b.draft_m) };
+      meta.hydrostatics = { rows: p.hydrostatics.slice().sort((a, b) => a.draft_m - b.draft_m) };
     }
     // Build tank LCG map for cargo/slops and ballast
     const tank_lcgs = {};
@@ -498,10 +498,10 @@ function extractShipMetaFromProfile(profile) {
         if (!t || typeof t.lcg !== 'number') continue;
         const norm = normalizeCargoNameToId(t.name || t.id || '');
         if (norm && /^COT\d+(P|S|C)$/.test(norm.id)) tank_lcgs[norm.id] = Number(t.lcg);
-        else if (/SLOP/i.test(String(t.name||''))) {
-          const side = /(\(|\s)(P|S)(\)|\b)/.exec(String(t.name||'').toUpperCase());
-          if (side && side[2]==='P') tank_lcgs['SLOPP'] = Number(t.lcg);
-          if (side && side[2]==='S') tank_lcgs['SLOPS'] = Number(t.lcg);
+        else if (/SLOP/i.test(String(t.name || ''))) {
+          const side = /(\(|\s)(P|S)(\)|\b)/.exec(String(t.name || '').toUpperCase());
+          if (side && side[2] === 'P') tank_lcgs['SLOPP'] = Number(t.lcg);
+          if (side && side[2] === 'S') tank_lcgs['SLOPS'] = Number(t.lcg);
         }
       }
     };
@@ -516,7 +516,7 @@ function extractShipMetaFromProfile(profile) {
           if (!id) continue;
           if (isFinite(t.lcg)) tank_lcgs[id] = Number(t.lcg);
           const cap = (typeof t.cap_m3 === 'number') ? t.cap_m3 : (typeof t.capacity_m3 === 'number') ? t.capacity_m3 : (typeof t.volume_m3 === 'number') ? t.volume_m3 : (typeof t.volume === 'number') ? t.volume : undefined;
-          ballast_tanks.push({ id, name: t.name || id, cap_m3: isFinite(cap) ? Number(cap) : 0, lcg: Number(t.lcg)||0 });
+          ballast_tanks.push({ id, name: t.name || id, cap_m3: isFinite(cap) ? Number(cap) : 0, lcg: Number(t.lcg) || 0 });
         }
       }
     }
@@ -525,10 +525,10 @@ function extractShipMetaFromProfile(profile) {
     // Consumables LCGs (FO/FW/OTH) — store individually if provided; also compute simple average as fallback
     if (p.tanks && Array.isArray(p.tanks.consumables)) {
       const cons = p.tanks.consumables;
-      const pick = (type)=> cons.find(x => String(x.type||'').toLowerCase()===type);
+      const pick = (type) => cons.find(x => String(x.type || '').toLowerCase() === type);
       const fo = pick('fo'); const fw = pick('fw'); const oth = pick('oth');
       const vals = [fo, fw, oth].filter(x => x && isFinite(x.lcg)).map(x => Number(x.lcg));
-      if (vals.length > 0) meta.lcg_fo_fw = vals.reduce((s,v)=>s+v,0)/vals.length;
+      if (vals.length > 0) meta.lcg_fo_fw = vals.reduce((s, v) => s + v, 0) / vals.length;
       meta.consumables_lcg = {
         fo: (fo && isFinite(fo.lcg)) ? Number(fo.lcg) : null,
         fw: (fw && isFinite(fw.lcg)) ? Number(fw.lcg) : null,
@@ -556,17 +556,17 @@ function applyShipMeta(meta) {
       if (isFinite(c.oth)) SHIP_PARAMS.LCG_OTH = Number(c.oth);
     }
     if (meta.hydrostatics && Array.isArray(meta.hydrostatics.rows) && meta.hydrostatics.rows.length) {
-      HYDRO_ROWS = meta.hydrostatics.rows.slice().sort((a,b)=>a.draft_m-b.draft_m);
+      HYDRO_ROWS = meta.hydrostatics.rows.slice().sort((a, b) => a.draft_m - b.draft_m);
     }
     if (meta.tank_lcgs) {
       const m = new Map();
-      Object.entries(meta.tank_lcgs).forEach(([k,v])=>{ if (isFinite(v)) m.set(k, Number(v)); });
+      Object.entries(meta.tank_lcgs).forEach(([k, v]) => { if (isFinite(v)) m.set(k, Number(v)); });
       TANK_LCG_MAP = m;
     }
     if (Array.isArray(meta.ballast_tanks)) {
       BALLAST_TANKS = meta.ballast_tanks.slice();
     }
-  } catch {}
+  } catch { }
 }
 function mapCargoArrayToTanks(cargoArr, defaults = { min_pct: 0.5, max_pct: 0.98 }) {
   const out = [];
@@ -579,9 +579,9 @@ function mapCargoArrayToTanks(cargoArr, defaults = { min_pct: 0.5, max_pct: 0.98
     if (seen.has(id)) continue; // avoid duplicates
     const volume = (typeof row.cap_m3 === 'number') ? row.cap_m3
       : (typeof row.volume_m3 === 'number') ? row.volume_m3
-      : (typeof row.capacity_m3 === 'number') ? row.capacity_m3
-      : (typeof row.volume === 'number') ? row.volume
-      : undefined;
+        : (typeof row.capacity_m3 === 'number') ? row.capacity_m3
+          : (typeof row.volume === 'number') ? row.volume
+            : undefined;
     if (typeof volume !== 'number') continue;
     out.push({ id, volume_m3: volume, min_pct: defaults.min_pct, max_pct: defaults.max_pct, included: true, side: norm.side });
     seen.add(id);
@@ -609,7 +609,7 @@ function parseShipsFromExport(json) {
     } else {
       for (let i = 0; i < json.length; i++) {
         const s = json[i];
-        const name = s?.ship?.name || s?.name || `Ship ${i+1}`;
+        const name = s?.ship?.name || s?.name || `Ship ${i + 1}`;
         const cargo = s?.tanks?.cargo || s?.cargo || [];
         pushIfAny(name, cargo);
       }
@@ -627,17 +627,17 @@ function renderTankEditor() {
       <td><input value="${t.id}" data-idx="${idx}" data-field="id" style="width:70px"/></td>
       <td>
         <select data-idx="${idx}" data-field="side" style="width:88px">
-          <option value="port" ${t.side==='port'?'selected':''}>port</option>
-          <option value="starboard" ${t.side==='starboard'?'selected':''}>starboard</option>
-          <option value="center" ${t.side==='center'?'selected':''}>center</option>
+          <option value="port" ${t.side === 'port' ? 'selected' : ''}>port</option>
+          <option value="starboard" ${t.side === 'starboard' ? 'selected' : ''}>starboard</option>
+          <option value="center" ${t.side === 'center' ? 'selected' : ''}>center</option>
         </select>
       </td>
       <td><input type="number" step="1" min="0" value="${t.volume_m3}" data-idx="${idx}" data-field="volume_m3" style="width:72px"/></td>
-      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.min_pct||0)*100)}" data-idx="${idx}" data-field="min_pct_pct" style="width:56px"/></td>
-      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.max_pct||0)*100)}" data-idx="${idx}" data-field="max_pct_pct" style="width:56px"/></td>
-      <td><input type="checkbox" ${t.included?'checked':''} data-idx="${idx}" data-field="included"/></td>
-      <td><input type="number" step="0.1" min="0" value="${Number(t.preload_m3||0)}" data-idx="${idx}" data-field="preload_m3" style="width:70px"/></td>
-      <td><input type="number" step="0.0001" min="0" value="${((t.preload_density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="preload_rho_gcm3" style="width:70px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.min_pct || 0) * 100)}" data-idx="${idx}" data-field="min_pct_pct" style="width:56px"/></td>
+      <td><input type="number" step="1" min="0" max="100" value="${Math.round((t.max_pct || 0) * 100)}" data-idx="${idx}" data-field="max_pct_pct" style="width:56px"/></td>
+      <td><input type="checkbox" ${t.included ? 'checked' : ''} data-idx="${idx}" data-field="included"/></td>
+      <td><input type="number" step="0.1" min="0" value="${Number(t.preload_m3 || 0)}" data-idx="${idx}" data-field="preload_m3" style="width:70px"/></td>
+      <td><input type="number" step="0.0001" min="0" value="${((t.preload_density_kg_m3 || 0) / 1000).toFixed(4)}" data-idx="${idx}" data-field="preload_rho_gcm3" style="width:70px"/></td>
       <td class="row-controls"><button data-act="del-tank" data-idx="${idx}">Delete</button></td>
     </tr>`;
   }).join('');
@@ -656,11 +656,11 @@ function renderTankEditor() {
       let field = target.getAttribute('data-field');
       let val = target.type === 'checkbox' ? target.checked : target.value;
       if (field === 'volume_m3') val = Number(val);
-      if (field === 'min_pct_pct') { field = 'min_pct'; val = Math.max(0, Math.min(100, Number(val)))/100; }
-      if (field === 'max_pct_pct') { field = 'max_pct'; val = Math.max(0, Math.min(100, Number(val)))/100; }
-      if (field === 'preload_m3') { val = Math.max(0, Number(String(val).replace(',', '.'))||0); }
-      if (field === 'preload_rho_gcm3') { field = 'preload_density_kg_m3'; const gcm3 = Number(String(val).replace(',', '.')); val = isNaN(gcm3)? (tanks[idx].preload_density_kg_m3||0) : gcm3*1000; }
-      tanks[idx] = { ...tanks[idx], [field]: field==='included' ? (target.checked) : val };
+      if (field === 'min_pct_pct') { field = 'min_pct'; val = Math.max(0, Math.min(100, Number(val))) / 100; }
+      if (field === 'max_pct_pct') { field = 'max_pct'; val = Math.max(0, Math.min(100, Number(val))) / 100; }
+      if (field === 'preload_m3') { val = Math.max(0, Number(String(val).replace(',', '.')) || 0); }
+      if (field === 'preload_rho_gcm3') { field = 'preload_density_kg_m3'; const gcm3 = Number(String(val).replace(',', '.')); val = isNaN(gcm3) ? (tanks[idx].preload_density_kg_m3 || 0) : gcm3 * 1000; }
+      tanks[idx] = { ...tanks[idx], [field]: field === 'included' ? (target.checked) : val };
       persistLastState();
       render();
     });
@@ -675,13 +675,13 @@ function renderTankEditor() {
   });
 }
 
-function loadBallastMeta(){ try { return JSON.parse(localStorage.getItem(LS_BALLAST_META)||'{}'); } catch { return {}; } }
-function saveBallastMeta(m){ try { localStorage.setItem(LS_BALLAST_META, JSON.stringify(m||{})); } catch {} }
+function loadBallastMeta() { try { return JSON.parse(localStorage.getItem(LS_BALLAST_META) || '{}'); } catch { return {}; } }
+function saveBallastMeta(m) { try { localStorage.setItem(LS_BALLAST_META, JSON.stringify(m || {})); } catch { } }
 
 function renderBallastEditor() {
   if (!ballastEditorEl) return;
   const meta = loadBallastMeta();
-  const rows = (BALLAST_TANKS||[]).map((bt, idx) => {
+  const rows = (BALLAST_TANKS || []).map((bt, idx) => {
     const m = meta[bt.id] || {};
     const minPct = Math.round(((m.min_pct ?? 0) * 100));
     const maxPct = Math.round(((m.max_pct ?? 1) * 100));
@@ -693,15 +693,15 @@ function renderBallastEditor() {
       <td>${bt.id}</td>
       <td>
         <select data-id="${bt.id}" data-field="side" style="width:88px">
-          <option value="port" ${side==='port'?'selected':''}>port</option>
-          <option value="starboard" ${side==='starboard'?'selected':''}>starboard</option>
-          <option value="center" ${side==='center'?'selected':''}>center</option>
+          <option value="port" ${side === 'port' ? 'selected' : ''}>port</option>
+          <option value="starboard" ${side === 'starboard' ? 'selected' : ''}>starboard</option>
+          <option value="center" ${side === 'center' ? 'selected' : ''}>center</option>
         </select>
       </td>
-      <td style="text-align:right;">${Number(bt.cap_m3||0)}</td>
+      <td style="text-align:right;">${Number(bt.cap_m3 || 0)}</td>
       <td><input type="number" step="1" min="0" max="100" value="${minPct}" data-id="${bt.id}" data-field="min_pct_pct" style="width:56px"/></td>
       <td><input type="number" step="1" min="0" max="100" value="${maxPct}" data-id="${bt.id}" data-field="max_pct_pct" style="width:56px"/></td>
-      <td><input type="checkbox" ${included?'checked':''} data-id="${bt.id}" data-field="included"/></td>
+      <td><input type="checkbox" ${included ? 'checked' : ''} data-id="${bt.id}" data-field="included"/></td>
       <td><input type="number" step="0.1" min="0" value="${preload}" data-id="${bt.id}" data-field="preload_m3" style="width:70px"/></td>
       <td><input type="number" step="0.0001" min="0" value="${rho}" data-id="${bt.id}" data-field="preload_rho_gcm3" style="width:70px"/></td>
     </tr>`;
@@ -717,13 +717,13 @@ function renderBallastEditor() {
   ballastEditorEl.querySelectorAll('input,select').forEach(el => {
     el.addEventListener('change', () => {
       const id = el.getAttribute('data-id'); const field = el.getAttribute('data-field');
-      const was = loadBallastMeta(); const rec = Object.assign({ min_pct:0, max_pct:1, included:true, preload_m3:0, preload_density_kg_m3:1025 }, was[id]||{});
+      const was = loadBallastMeta(); const rec = Object.assign({ min_pct: 0, max_pct: 1, included: true, preload_m3: 0, preload_density_kg_m3: 1025 }, was[id] || {});
       if (field === 'included') rec.included = el.checked;
-      else if (field === 'min_pct_pct') rec.min_pct = Math.max(0, Math.min(100, Number(el.value)||0))/100;
-      else if (field === 'max_pct_pct') rec.max_pct = Math.max(0, Math.min(100, Number(el.value)||0))/100;
-      else if (field === 'preload_m3') rec.preload_m3 = Math.max(0, Number(String(el.value).replace(',', '.'))||0);
-      else if (field === 'preload_rho_gcm3') { const g=Number(String(el.value).replace(',', '.')); rec.preload_density_kg_m3 = isNaN(g)? rec.preload_density_kg_m3 : g*1000; }
-      else if (field === 'side') rec.side = String(el.value||'');
+      else if (field === 'min_pct_pct') rec.min_pct = Math.max(0, Math.min(100, Number(el.value) || 0)) / 100;
+      else if (field === 'max_pct_pct') rec.max_pct = Math.max(0, Math.min(100, Number(el.value) || 0)) / 100;
+      else if (field === 'preload_m3') rec.preload_m3 = Math.max(0, Number(String(el.value).replace(',', '.')) || 0);
+      else if (field === 'preload_rho_gcm3') { const g = Number(String(el.value).replace(',', '.')); rec.preload_density_kg_m3 = isNaN(g) ? rec.preload_density_kg_m3 : g * 1000; }
+      else if (field === 'side') rec.side = String(el.value || '');
       was[id] = rec; saveBallastMeta(was);
       render();
     });
@@ -737,10 +737,10 @@ function renderParcelEditor() {
     return `<tr>
       <td><input value="${p.id}" data-idx="${idx}" data-field="id" style="width:70px"/></td>
       <td><input value="${p.name}" data-idx="${idx}" data-field="name" style="width:120px"/></td>
-      <td><input type="number" step="0.001" min="0" value="${p.total_m3 != null ? Number(p.total_m3).toFixed(3) : ''}" data-idx="${idx}" data-field="total_m3" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
-      <td><input type="number" step="0.1" min="0" value="${wt!=='' ? Number(wt).toFixed(1) : ''}" data-idx="${idx}" data-field="weight_mt" style="width:90px" ${p.fill_remaining? 'disabled':''}/></td>
-      <td><input type="checkbox" ${p.fill_remaining?'checked':''} data-idx="${idx}" data-field="fill_remaining" /></td>
-      <td><input type="number" step="0.0001" min="0" value="${((p.density_kg_m3||0)/1000).toFixed(4)}" data-idx="${idx}" data-field="density_g_cm3" style="width:90px"/></td>
+      <td><input type="number" step="0.001" min="0" value="${p.total_m3 != null ? Number(p.total_m3).toFixed(3) : ''}" data-idx="${idx}" data-field="total_m3" style="width:90px" ${p.fill_remaining ? 'disabled' : ''}/></td>
+      <td><input type="number" step="0.1" min="0" value="${wt !== '' ? Number(wt).toFixed(1) : ''}" data-idx="${idx}" data-field="weight_mt" style="width:90px" ${p.fill_remaining ? 'disabled' : ''}/></td>
+      <td><input type="checkbox" ${p.fill_remaining ? 'checked' : ''} data-idx="${idx}" data-field="fill_remaining" /></td>
+      <td><input type="number" step="0.0001" min="0" value="${((p.density_kg_m3 || 0) / 1000).toFixed(4)}" data-idx="${idx}" data-field="density_g_cm3" style="width:90px"/></td>
       <td><input type="number" step="1" value="${p.temperature_c}" data-idx="${idx}" data-field="temperature_c" style="width:70px"/></td>
       <td><input type="color" value="${p.color || '#888888'}" data-idx="${idx}" data-field="color"/></td>
       <td class="row-controls"><button data-act="del-parcel" data-idx="${idx}">Delete</button></td>
@@ -785,7 +785,7 @@ function renderParcelEditor() {
       }
       // Ensure unique parcel IDs; auto-adjust duplicates
       if (field === 'id') {
-        let base = String(val).trim() || `P${idx+1}`;
+        let base = String(val).trim() || `P${idx + 1}`;
         let unique = base;
         let n = 2;
         while (parcels.some((p, i) => i !== idx && p.id === unique)) {
@@ -826,7 +826,7 @@ function renderParcelEditor() {
       }
       parcels[idx] = nextParcel;
       // keep FR parcel in sync after any change
-      try { if (typeof updateFRParcelFromInputs === 'function') { const changed = updateFRParcelFromInputs(); if (changed) parcels = parcels.slice(); } } catch {}
+      try { if (typeof updateFRParcelFromInputs === 'function') { const changed = updateFRParcelFromInputs(); if (changed) parcels = parcels.slice(); } } catch { }
       persistLastState();
       render();
     });
@@ -903,26 +903,26 @@ function renderSummaryAndSvg(result) {
       const byTank = new Map();
       tanks.forEach(t => byTank.set(t.id, t));
       const rhoB = 1.025;
-      const allAllocs = allocations.concat((ballastAllocs||[]).map(b => ({ tank_id: b.tank_id, parcel_id:'BALLAST', assigned_m3: Number(b.assigned_m3)||0, weight_mt: (Number(b.assigned_m3)||0) * rhoB })));
+      const allAllocs = allocations.concat((ballastAllocs || []).map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', assigned_m3: Number(b.assigned_m3) || 0, weight_mt: (Number(b.assigned_m3) || 0) * rhoB })));
       let pW = 0, sW = 0;
       allAllocs.forEach(a => {
         const t = byTank.get(a.tank_id);
         const side = t?.side || guessSideFromId(a.tank_id);
-        if (side === 'port') pW += (a.weight_mt||0);
-        else if (side === 'starboard') sW += (a.weight_mt||0);
+        if (side === 'port') pW += (a.weight_mt || 0);
+        else if (side === 'starboard') sW += (a.weight_mt || 0);
       });
       const denom = pW + sW;
       const imb = denom > 0 ? (Math.abs(pW - sW) / denom) * 100 : 0;
       const dir = (pW > sW) ? 'port' : ((pW < sW) ? 'starboard' : 'even');
-      const warnLine = imb <= TOL_PS_PCT ? `Balanced (d% ${imb.toFixed(2)})` : `Imbalance ${imb.toFixed(2)}%${dir==='even'?'':` (list to ${dir})`}`;
+      const warnLine = imb <= TOL_PS_PCT ? `Balanced (d% ${imb.toFixed(2)})` : `Imbalance ${imb.toFixed(2)}%${dir === 'even' ? '' : ` (list to ${dir})`}`;
       if (summaryEl) summaryEl.innerHTML = `
         <div class="summary-bar" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <div>Port <b>${(pW||0).toFixed(2)}</b> MT</div>
+          <div>Port <b>${(pW || 0).toFixed(2)}</b> MT</div>
           <div>${warnLine}</div>
-          <div>Starboard <b>${(sW||0).toFixed(2)}</b> MT</div>
+          <div>Starboard <b>${(sW || 0).toFixed(2)}</b> MT</div>
         </div>
       `;
-    } catch {}
+    } catch { }
   }
 
   // Requested vs loaded check (underfill alert)
@@ -953,7 +953,7 @@ function renderSummaryAndSvg(result) {
         const diff = requested - loaded;
         const byDraft = (() => {
           try {
-            const hasFR = Array.isArray(parcels) && parcels.some(p=>!!p.fill_remaining);
+            const hasFR = Array.isArray(parcels) && parcels.some(p => !!p.fill_remaining);
             return hasFR && Number.isFinite(LAST_MAX_CARGO_MT) && LAST_MAX_CARGO_MT > 0;
           } catch { return false; }
         })();
@@ -964,7 +964,7 @@ function renderSummaryAndSvg(result) {
       }
       warnsEl.innerHTML = html;
     }
-  } catch {}
+  } catch { }
 
   // Hydro summary (optional): compute F/M/A drafts, trim, displacement, DWT if hydro rows & LCG map available
   try {
@@ -974,7 +974,7 @@ function renderSummaryAndSvg(result) {
         hbox.style.display = 'none';
       } else {
         const rhoB = 1.025;
-        const allAllocs = allocations.concat((ballastAllocs||[]).map(b => ({ tank_id: b.tank_id, parcel_id:'BALLAST', assigned_m3: Number(b.assigned_m3)||0, weight_mt: (Number(b.assigned_m3)||0) * rhoB })));
+        const allAllocs = allocations.concat((ballastAllocs || []).map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', assigned_m3: Number(b.assigned_m3) || 0, weight_mt: (Number(b.assigned_m3) || 0) * rhoB })));
         const metrics = computeHydroForAllocations(allAllocs);
         if (!metrics) {
           hbox.style.display = 'none';
@@ -983,8 +983,8 @@ function renderSummaryAndSvg(result) {
           hbox.style.display = 'block';
           hbox.innerHTML = `
             <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap:8px; font-size:13px;">
-              <div><div class="muted">Displacement (t)</div><div><b>${isFinite(W_total)?W_total.toFixed(1):'-'}</b></div></div>
-              <div><div class="muted">DWT (t)</div><div><b>${isFinite(DWT)?DWT.toFixed(1):'-'}</b></div></div>
+              <div><div class="muted">Displacement (t)</div><div><b>${isFinite(W_total) ? W_total.toFixed(1) : '-'}</b></div></div>
+              <div><div class="muted">DWT (t)</div><div><b>${isFinite(DWT) ? DWT.toFixed(1) : '-'}</b></div></div>
               <div><div class="muted">Draft Fwd (m)</div><div><b>${Tf.toFixed(3)}</b></div></div>
               <div><div class="muted">Draft Mean (m)</div><div><b>${Tm.toFixed(3)}</b></div></div>
               <div><div class="muted">Draft Aft (m)</div><div><b>${Ta.toFixed(3)}</b></div></div>
@@ -994,7 +994,7 @@ function renderSummaryAndSvg(result) {
         }
       }
     }
-  } catch(_) {}
+  } catch (_) { }
 
   // Larger, card-like ship layout (HTML/CSS)
   // Respect the order in the tank editor (array order). Show all tanks (incl/excl); mark excluded visually.
@@ -1045,15 +1045,15 @@ function renderSummaryAndSvg(result) {
       const cellP = document.createElement('div');
       cellP.className = 'tank-cell';
       const a = byTank[port.id];
-      const parcel = a ? parcels.find(p=>p.id===a.parcel_id) : null;
+      const parcel = a ? parcels.find(p => p.id === a.parcel_id) : null;
       if (parcel) cellP.style.background = '#0f1a3a';
       cellP.innerHTML = `
         <div class="id">${port.id}</div>
         ${a ? `
           <div class="meta">${parcel?.name || a.parcel_id}</div>
           <div class="meta">Vol: ${a.assigned_m3.toFixed(0)} m³</div>
-          <div class="meta">Fill: ${(a.fill_pct*100).toFixed(1)}%</div>
-          <div class="fillbar"><div style="height:${(a.fill_pct*100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
+          <div class="meta">Fill: ${(a.fill_pct * 100).toFixed(1)}%</div>
+          <div class="fillbar"><div style="height:${(a.fill_pct * 100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
         ` : `
           <div class="empty-hint">Cargo</div>
           <div class="empty-hint">Volume</div>
@@ -1062,20 +1062,20 @@ function renderSummaryAndSvg(result) {
       `;
       // Preload line
       try {
-        const tk = tanks.find(t=>t.id===port.id);
-        const pv = Number(tk?.preload_m3)||0; if (pv>0) {
-          const pl = document.createElement('div'); pl.className='meta'; pl.textContent = `Preload: ${pv.toFixed(0)} m³`;
+        const tk = tanks.find(t => t.id === port.id);
+        const pv = Number(tk?.preload_m3) || 0; if (pv > 0) {
+          const pl = document.createElement('div'); pl.className = 'meta'; pl.textContent = `Preload: ${pv.toFixed(0)} m³`;
           cellP.appendChild(pl);
         }
-      } catch {}
+      } catch { }
       // Excluded mark
-      try { const tk = tanks.find(t=>t.id===port.id); if (tk && tk.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellP.appendChild(ex);} } catch {}
+      try { const tk = tanks.find(t => t.id === port.id); if (tk && tk.included === false) { const ex = document.createElement('div'); ex.className = 'meta'; ex.style.color = '#ef4444'; ex.textContent = 'Excluded'; cellP.appendChild(ex); } } catch { }
       if (parcel) cellP.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellP);
     }
     // Center cell(s) if any
     if (hasCenter) {
-      const centers = groupMap[key].centers.sort((a,b)=>a.id.localeCompare(b.id));
+      const centers = groupMap[key].centers.sort((a, b) => a.id.localeCompare(b.id));
       const cellC = document.createElement('div');
       cellC.className = 'tank-cell';
       if (centerOnly) {
@@ -1083,14 +1083,14 @@ function renderSummaryAndSvg(result) {
         // Single full-width center: render like a side cell and color the full cell
         const ct = centers[0];
         const a = byTank[ct.id];
-        const parcel = a ? parcels.find(p=>p.id===a.parcel_id) : null;
+        const parcel = a ? parcels.find(p => p.id === a.parcel_id) : null;
         cellC.innerHTML = `
           <div class="id">${ct.id}</div>
           ${a ? `
             <div class="meta">${parcel?.name || a.parcel_id}</div>
             <div class="meta">Vol: ${a.assigned_m3.toFixed(0)} m³</div>
-            <div class="meta">Fill: ${(a.fill_pct*100).toFixed(1)}%</div>
-            <div class="fillbar"><div style="height:${(a.fill_pct*100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
+            <div class="meta">Fill: ${(a.fill_pct * 100).toFixed(1)}%</div>
+            <div class="fillbar"><div style="height:${(a.fill_pct * 100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
           ` : `
             <div class="empty-hint">Cargo</div>
             <div class="empty-hint">Volume</div>
@@ -1098,7 +1098,7 @@ function renderSummaryAndSvg(result) {
           `}
         `;
         // Excluded mark
-        try { const tko = tanks.find(t=>t.id===ct.id); if (tko && tko.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellC.appendChild(ex);} } catch {}
+        try { const tko = tanks.find(t => t.id === ct.id); if (tko && tko.included === false) { const ex = document.createElement('div'); ex.className = 'meta'; ex.style.color = '#ef4444'; ex.textContent = 'Excluded'; cellC.appendChild(ex); } } catch { }
         if (a) {
           cellC.style.background = '#0f1a3a';
           if (parcel?.color) cellC.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
@@ -1106,18 +1106,18 @@ function renderSummaryAndSvg(result) {
       } else {
         centers.forEach((ct, i) => {
           const a = byTank[ct.id];
-          const parcel = a ? parcels.find(p=>p.id===a.parcel_id) : null;
+          const parcel = a ? parcels.find(p => p.id === a.parcel_id) : null;
           const block = document.createElement('div');
           block.className = 'tank-cell';
           block.style.minHeight = '100px';
-          block.style.marginBottom = i < centers.length-1 ? '6px' : '0';
+          block.style.marginBottom = i < centers.length - 1 ? '6px' : '0';
           block.innerHTML = `
             <div class="id">${ct.id}</div>
             ${a ? `
               <div class="meta">${parcel?.name || a.parcel_id}</div>
               <div class="meta">Vol: ${a.assigned_m3.toFixed(0)} m³</div>
-              <div class="meta">Fill: ${(a.fill_pct*100).toFixed(1)}%</div>
-              <div class="fillbar"><div style="height:${(a.fill_pct*100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
+              <div class="meta">Fill: ${(a.fill_pct * 100).toFixed(1)}%</div>
+              <div class="fillbar"><div style="height:${(a.fill_pct * 100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
             ` : `
               <div class="empty-hint">Cargo</div>
               <div class="empty-hint">Volume</div>
@@ -1125,7 +1125,7 @@ function renderSummaryAndSvg(result) {
             `}
           `;
           // Excluded mark
-          try { const tko = tanks.find(t=>t.id===ct.id); if (tko && tko.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; block.appendChild(ex);} } catch {}
+          try { const tko = tanks.find(t => t.id === ct.id); if (tko && tko.included === false) { const ex = document.createElement('div'); ex.className = 'meta'; ex.style.color = '#ef4444'; ex.textContent = 'Excluded'; block.appendChild(ex); } } catch { }
           if (a) {
             block.style.background = '#0f1a3a';
             if (parcel?.color) block.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
@@ -1140,21 +1140,21 @@ function renderSummaryAndSvg(result) {
       const cellS = document.createElement('div');
       cellS.className = 'tank-cell';
       const a = byTank[star.id];
-      const parcel = a ? parcels.find(p=>p.id===a.parcel_id) : null;
+      const parcel = a ? parcels.find(p => p.id === a.parcel_id) : null;
       cellS.innerHTML = `
         <div class="id">${star.id}</div>
         ${a ? `
           <div class="meta">${parcel?.name || a.parcel_id}</div>
           <div class="meta">Vol: ${a.assigned_m3.toFixed(0)} m³</div>
-          <div class="meta">Fill: ${(a.fill_pct*100).toFixed(1)}%</div>
-          <div class="fillbar"><div style="height:${(a.fill_pct*100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
+          <div class="meta">Fill: ${(a.fill_pct * 100).toFixed(1)}%</div>
+          <div class="fillbar"><div style="height:${(a.fill_pct * 100).toFixed(1)}%; background:${parcel?.color || '#3b82f6'}"></div></div>
         ` : `
           <div class="empty-hint">Cargo</div>
           <div class="empty-hint">Volume</div>
           <div class="empty-hint">%</div>
         `}
       `;
-      try { const tk = tanks.find(t=>t.id===star.id); const pv = Number(tk?.preload_m3)||0; if (pv>0){ const pl=document.createElement('div'); pl.className='meta'; pl.textContent=`Preload: ${pv.toFixed(0)} m³`; cellS.appendChild(pl);} if (tk && tk.included===false){ const ex=document.createElement('div'); ex.className='meta'; ex.style.color='#ef4444'; ex.textContent='Excluded'; cellS.appendChild(ex);} } catch {}
+      try { const tk = tanks.find(t => t.id === star.id); const pv = Number(tk?.preload_m3) || 0; if (pv > 0) { const pl = document.createElement('div'); pl.className = 'meta'; pl.textContent = `Preload: ${pv.toFixed(0)} m³`; cellS.appendChild(pl); } if (tk && tk.included === false) { const ex = document.createElement('div'); ex.className = 'meta'; ex.style.color = '#ef4444'; ex.textContent = 'Excluded'; cellS.appendChild(ex); } } catch { }
       if (parcel) cellS.style.boxShadow = `inset 0 0 0 9999px ${parcel.color}18`;
       row.appendChild(cellS);
     }
@@ -1185,24 +1185,24 @@ function renderSummaryAndSvg(result) {
     const bhull = bShip.querySelector('#bhull');
     // Allocations map (may be empty)
     const usedB = new Map();
-    (ballastAllocs||[]).forEach(b => {
+    (ballastAllocs || []).forEach(b => {
       const prev = usedB.get(b.tank_id);
-      if (prev) usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: (Number(prev.assigned_m3)||0) + (Number(b.assigned_m3)||0) });
-      else usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: Number(b.assigned_m3)||0 });
+      if (prev) usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: (Number(prev.assigned_m3) || 0) + (Number(b.assigned_m3) || 0) });
+      else usedB.set(b.tank_id, { tank_id: b.tank_id, assigned_m3: Number(b.assigned_m3) || 0 });
     });
     // Pair by base id and sort rows by LCG from Ship Data (bow/top first)
     const bmetaSide = loadBallastMeta ? loadBallastMeta() : {};
-    const getSide = (id)=> {
+    const getSide = (id) => {
       const m = bmetaSide && bmetaSide[id];
       if (m && m.side) return m.side;
       return guessSideFromId(id) || null;
     };
-    const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+    const baseKey = (s) => String(s || '').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
     /** @type {Record<string,{P:any,S:any,centers:any[],lcg:number}>} */
     const groups = {};
     BALLAST_TANKS.forEach(t => {
       const key = baseKey(t.id);
-      if (!groups[key]) groups[key] = { P:null, S:null, centers:[], lcg: NaN };
+      if (!groups[key]) groups[key] = { P: null, S: null, centers: [], lcg: NaN };
       const side = getSide(t.id);
       if (side === 'port') groups[key].P = t;
       else if (side === 'starboard') groups[key].S = t;
@@ -1211,11 +1211,11 @@ function renderSummaryAndSvg(result) {
       const vals = [];
       if (Number.isFinite(t.lcg)) vals.push(Number(t.lcg));
       if (Number.isFinite(groups[key].lcg)) vals.push(Number(groups[key].lcg));
-      groups[key].lcg = vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : groups[key].lcg;
+      groups[key].lcg = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) : groups[key].lcg;
     });
     const sorted = Object.keys(groups)
-      .map(k => ({ key:k, data:groups[k] }))
-      .sort((a,b) => {
+      .map(k => ({ key: k, data: groups[k] }))
+      .sort((a, b) => {
         const ax = Number.isFinite(a.data.lcg) ? a.data.lcg : -Infinity;
         const bx = Number.isFinite(b.data.lcg) ? b.data.lcg : -Infinity;
         return bx - ax; // larger LCG (forward) first → bow at top
@@ -1226,14 +1226,14 @@ function renderSummaryAndSvg(result) {
       if (!tank) { cell.innerHTML = '<div class="empty-hint">-</div>'; return cell; }
       const a = usedB.get(tank.id);
       const pct = (a && isFinite(a.percent)) ? Number(a.percent)
-        : (a && isFinite(a.assigned_m3) && isFinite(tank.cap_m3) && tank.cap_m3>0) ? (a.assigned_m3 / tank.cap_m3 * 100)
-        : NaN;
+        : (a && isFinite(a.assigned_m3) && isFinite(tank.cap_m3) && tank.cap_m3 > 0) ? (a.assigned_m3 / tank.cap_m3 * 100)
+          : NaN;
       cell.innerHTML = `
         <div class="id">${tank.id}</div>
         ${a ? `
-          <div class="meta">Vol: ${(a.assigned_m3||0).toFixed(0)} m³</div>
-          <div class="meta">Fill: ${isFinite(pct)?pct.toFixed(1):'-'}%</div>
-          <div class="fillbar"><div style=\"height:${isFinite(pct)?pct.toFixed(1):'0'}%; background:#22d3ee\"></div></div>
+          <div class="meta">Vol: ${(a.assigned_m3 || 0).toFixed(0)} m³</div>
+          <div class="meta">Fill: ${isFinite(pct) ? pct.toFixed(1) : '-'}%</div>
+          <div class="fillbar"><div style=\"height:${isFinite(pct) ? pct.toFixed(1) : '0'}%; background:#22d3ee\"></div></div>
         ` : `
           <div class="empty-hint">Ballast</div>
           <div class="empty-hint">Volume</div>
@@ -1243,7 +1243,7 @@ function renderSummaryAndSvg(result) {
       return cell;
     };
 
-    sorted.forEach(({data}) => {
+    sorted.forEach(({ data }) => {
       const row = document.createElement('div'); row.className = 'tank-row';
       const hasCenter = data.centers && data.centers.length > 0;
       const hasSides = !!(data.P || data.S);
@@ -1279,8 +1279,8 @@ function renderSummaryAndSvg(result) {
   legend.className = 'legend';
   parcels.forEach(p => {
     // calc totals actually assigned (not requested)
-    const assignedVol = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.assigned_m3,0);
-    const assignedWt = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.weight_mt,0);
+    const assignedVol = allocations.filter(a => a.parcel_id === p.id).reduce((s, a) => s + a.assigned_m3, 0);
+    const assignedWt = allocations.filter(a => a.parcel_id === p.id).reduce((s, a) => s + a.weight_mt, 0);
     const item = document.createElement('div');
     item.className = 'item';
     item.innerHTML = `
@@ -1327,8 +1327,8 @@ function renderSummaryAndSvg(result) {
     if (summaryEl) summaryEl.appendChild(capDiv);
 
     // Allocations table
-    const totalVol = allocations.reduce((s,a)=>s+a.assigned_m3,0);
-    const totalWt = allocations.reduce((s,a)=>s+a.weight_mt,0);
+    const totalVol = allocations.reduce((s, a) => s + a.assigned_m3, 0);
+    const totalWt = allocations.reduce((s, a) => s + a.weight_mt, 0);
     const tankOrder = new Map();
     includedTanks.forEach((t, idx) => tankOrder.set(t.id, idx));
     const sortedAllocs = allocations.slice().sort((a, b) => {
@@ -1345,7 +1345,7 @@ function renderSummaryAndSvg(result) {
         <td>${tank?.side || ''}</td>
         <td>${parcel?.name || a.parcel_id}</td>
         <td style="text-align:right;">${a.assigned_m3.toFixed(0)}</td>
-        <td style="text-align:right;">${(a.fill_pct*100).toFixed(1)}%</td>
+        <td style="text-align:right;">${(a.fill_pct * 100).toFixed(1)}%</td>
         <td style="text-align:right;">${a.weight_mt.toFixed(1)}</td>
       </tr>`;
     }).join('');
@@ -1360,31 +1360,31 @@ function renderSummaryAndSvg(result) {
     // Ballast table if any ballast allocations exist (rendered in Cargo & Allocation view)
     const bEl = document.getElementById('ballast-table');
     if (bEl) {
-      if ((ballastAllocs||[]).length === 0) {
+      if ((ballastAllocs || []).length === 0) {
         bEl.innerHTML = '<div class="muted">No ballast used.</div>';
       } else {
         const bRows = ballastAllocs.map(b => {
           const rho = 1.025;
-          const pct = isFinite(b.percent) ? Number(b.percent) : (()=>{
-            const t = (BALLAST_TANKS||[]).find(x => x.id === b.tank_id);
+          const pct = isFinite(b.percent) ? Number(b.percent) : (() => {
+            const t = (BALLAST_TANKS || []).find(x => x.id === b.tank_id);
             if (t && t.cap_m3 > 0 && isFinite(b.assigned_m3)) return (b.assigned_m3 / t.cap_m3) * 100;
             return undefined;
           })();
-          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3)||0) * rho;
+          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3) || 0) * rho;
           return `<tr>
             <td>${b.tank_id}</td>
-            <td style="text-align:right;">${isFinite(pct)?pct.toFixed(1)+'%':'-'}</td>
-            <td style="text-align:right;">${(b.assigned_m3||0).toFixed(1)}</td>
+            <td style="text-align:right;">${isFinite(pct) ? pct.toFixed(1) + '%' : '-'}</td>
+            <td style="text-align:right;">${(b.assigned_m3 || 0).toFixed(1)}</td>
             <td style="text-align:right;">${rho.toFixed(3)}</td>
             <td style="text-align:right;">${wt.toFixed(1)}</td>
           </tr>`;
         }).join('');
-        const bTotV = ballastAllocs.reduce((s,b)=>s+(b.assigned_m3||0),0);
-        const bTotW = ballastAllocs.reduce((s,b)=>{
+        const bTotV = ballastAllocs.reduce((s, b) => s + (b.assigned_m3 || 0), 0);
+        const bTotW = ballastAllocs.reduce((s, b) => {
           const rho = 1.025;
-          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3)||0) * rho;
+          const wt = isFinite(b.weight_mt) ? Number(b.weight_mt) : (Number(b.assigned_m3) || 0) * rho;
           return s + wt;
-        },0);
+        }, 0);
         bEl.innerHTML = `
           <table class="table">
             <thead><tr><th>Ballast Tank</th><th style=\"text-align:right;\">%</th><th style=\"text-align:right;\">Vol (m³)</th><th style=\"text-align:right;\">ρ (t/m³)</th><th style=\"text-align:right;\">Weight (t)</th></tr></thead>
@@ -1397,8 +1397,8 @@ function renderSummaryAndSvg(result) {
 
     // Parcels summary table
     const parcelRows = parcels.map(p => {
-      const vol = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.assigned_m3,0);
-      const wt = allocations.filter(a => a.parcel_id === p.id).reduce((s,a)=>s+a.weight_mt,0);
+      const vol = allocations.filter(a => a.parcel_id === p.id).reduce((s, a) => s + a.assigned_m3, 0);
+      const wt = allocations.filter(a => a.parcel_id === p.id).reduce((s, a) => s + a.weight_mt, 0);
       const rhoVal = Number(p.density_kg_m3);
       const rhoText = Number.isFinite(rhoVal) ? rhoVal.toFixed(4) : '';
       return `<tr>
@@ -1409,9 +1409,9 @@ function renderSummaryAndSvg(result) {
         <td style="text-align:right;">${wt.toFixed(1)}</td>
       </tr>`;
     }).join('');
-    const parcelTotalVol = allocations.reduce((s,a)=>s+a.assigned_m3,0);
-    const parcelTotalWt = allocations.reduce((s,a)=>s+a.weight_mt,0);
-  if (parcelTableEl) parcelTableEl.innerHTML = `
+    const parcelTotalVol = allocations.reduce((s, a) => s + a.assigned_m3, 0);
+    const parcelTotalWt = allocations.reduce((s, a) => s + a.weight_mt, 0);
+    if (parcelTableEl) parcelTableEl.innerHTML = `
       <table class="table">
         <thead><tr><th>Parcel</th><th>ID</th><th style="text-align:right;">ρ (kg/m³)</th><th style="text-align:right;">Assigned Vol (m³)</th><th style="text-align:right;">Weight (MT)</th></tr></thead>
         <tbody>${parcelRows}</tbody>
@@ -1433,8 +1433,8 @@ function computeVariants() {
   // Build policy (preloads) before computing variants
   const buildPolicy = () => {
     const pre = {};
-    for (const t of (tanks||[])) {
-      const v = Number(t?.preload_m3)||0; if (v>0) pre[t.id] = { v };
+    for (const t of (tanks || [])) {
+      const v = Number(t?.preload_m3) || 0; if (v > 0) pre[t.id] = { v };
     }
     return { preloads: pre };
   };
@@ -1448,11 +1448,24 @@ function computeVariants() {
   let vMaxEmptySingleBal = null;
   const altList = computePlanMinKAlternatives(tanks, parcels, 50, policy) || [];
 
+  // === EXHAUSTIVE SEARCH: Pareto-optimal plans ===
+  let exhaustivePlans = [];
+  try {
+    exhaustivePlans = computeAllViablePlans(tanks, parcels, policy, {
+      timeBudgetMs: 200,
+      maxResults: 500,
+      topN: 10
+    }) || [];
+  } catch (e) {
+    console.warn('Exhaustive search failed:', e);
+  }
+
+
   // Helper: detect band underfill usage in diagnostics (disallowed for Min Trim variant)
   const usedBand = (res) => {
     try {
       const ws = res?.diagnostics?.warnings || [];
-      return ws.some(w => /underfill band|Allowed underfill/i.test(String(w||'')));
+      return ws.some(w => /underfill band|Allowed underfill/i.test(String(w || '')));
     } catch { return false; }
   };
   // Helper: requested cargo weight from parcels (t)
@@ -1464,21 +1477,21 @@ function computeVariants() {
         const r = Number(p?.density_kg_m3);
         if (isFinite(v) && isFinite(r) && r > 0) req += (v * r) / 1000.0;
       }
-    } catch {}
+    } catch { }
     return req;
   })();
   // Helper: compute loaded cargo weight from allocations (t)
-  const loadedTons = (res) => (res?.allocations || []).reduce((s,a)=>s + (Number(a?.weight_mt)||0), 0);
+  const loadedTons = (res) => (res?.allocations || []).reduce((s, a) => s + (Number(a?.weight_mt) || 0), 0);
   // Build All-Max (fill all capacity) variant via synthetic FR plan
   let vAllMax = null;
   try {
-    if ((parcels||[]).length > 0) {
+    if ((parcels || []).length > 0) {
       const p0 = parcels[0];
       const frParcels = [{ ...p0, total_m3: undefined, fill_remaining: true }];
       vAllMax = computePlan(tanks, frParcels, policy);
-      if (!vAllMax || !Array.isArray(vAllMax.allocations) || (vAllMax?.diagnostics?.errors||[]).length) vAllMax = null;
+      if (!vAllMax || !Array.isArray(vAllMax.allocations) || (vAllMax?.diagnostics?.errors || []).length) vAllMax = null;
     }
-  } catch {}
+  } catch { }
   // Build Min Trim (min-k) by evaluating base min-k and its alternatives, without band, minimizing |Trim|
   let vMinTrim = null;
   let vMinTrimAlts = [];
@@ -1492,53 +1505,53 @@ function computeVariants() {
     for (const r of altList) if (r && Array.isArray(r.allocations)) cands.push(r);
     // Filter infeasible for our spec: underfill band used or under-loaded vs requested (>0)
     const tol = 0.1; // tons
-    const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors||[]).length);
+    const feasible = cands.filter(r => !usedBand(r) && (!isFinite(requestedTons) || requestedTons <= tol || (loadedTons(r) + tol >= requestedTons)) && !(r?.diagnostics?.errors || []).length);
     // Intra-selection trim optimization: try improving each feasible candidate without changing k or band
     const improved = [];
     for (const r of feasible) {
       const opt = optimizeTrimWithinSelection(r);
       const resUse = opt || r;
-      const met = computeHydroForAllocations(resUse.allocations||[]);
+      const met = computeHydroForAllocations(resUse.allocations || []);
       if (!met || !isFinite(met.Trim)) continue;
       improved.push({ res: resUse, trim: Math.abs(met.Trim) });
     }
-    improved.sort((a,b)=> a.trim - b.trim);
+    improved.sort((a, b) => a.trim - b.trim);
     if (improved.length) {
       vMinTrim = improved[0].res;
       // keep a couple of unique alternatives if any remain
       const seen = new Set();
-      const sig = (res) => (res.allocations||[]).map(a=>`${a.tank_id}:${a.assigned_m3.toFixed(3)}`).sort().join('|');
+      const sig = (res) => (res.allocations || []).map(a => `${a.tank_id}:${a.assigned_m3.toFixed(3)}`).sort().join('|');
       const bestSig = sig(vMinTrim);
       seen.add(bestSig);
-      for (let i=1;i<improved.length && vMinTrimAlts.length<2;i++) {
+      for (let i = 1; i < improved.length && vMinTrimAlts.length < 2; i++) {
         const s = sig(improved[i].res);
         if (!seen.has(s)) { seen.add(s); vMinTrimAlts.push(improved[i].res); }
       }
     }
     // Build Even Keel candidate by forcing all pairs (including SLOPs) and optimizing trim across all pairs
     try {
-      const fixedParcels = parcels.filter(p=>!p.fill_remaining);
+      const fixedParcels = parcels.filter(p => !p.fill_remaining);
       const targetParcel = fixedParcels[0] || parcels[0];
       if (targetParcel) {
         // Collect all available pair indices (include SLOPs)
         const pairIdxs = Array.from(new Set(
-          (tanks||[])
-            .filter(t=>t.included && (t.side==='port'||t.side==='starboard'))
-            .map(t=>uiPairIndex(t.id))
-            .filter(i=>i!=null)
+          (tanks || [])
+            .filter(t => t.included && (t.side === 'port' || t.side === 'starboard'))
+            .map(t => uiPairIndex(t.id))
+            .filter(i => i != null)
         ));
         if (pairIdxs.length) {
           const fpol = { forcedSelection: { [targetParcel.id]: { reservedPairs: pairIdxs, center: null } }, preloads: (policy && policy.preloads) || {} };
           const baseAll = computePlanMinKPolicy(tanks, parcels, fpol);
-          if (baseAll && Array.isArray(baseAll.allocations) && !(baseAll?.diagnostics?.errors||[]).length) {
+          if (baseAll && Array.isArray(baseAll.allocations) && !(baseAll?.diagnostics?.errors || []).length) {
             const opt = optimizeTrimWithinSelection(baseAll, { includeSlops: true }) || baseAll;
-            const met = computeHydroForAllocations(opt.allocations||[]);
+            const met = computeHydroForAllocations(opt.allocations || []);
             if (met && isFinite(met.Trim)) vEvenKeel = opt;
           }
         }
       }
-    } catch {}
-  } catch {}
+    } catch { }
+  } catch { }
 
   // Ballast optimization on top of min-trim cargo plan
   try {
@@ -1547,7 +1560,7 @@ function computeVariants() {
       const bal = optimizeBallastForTrim(baseForBallast, { rho_t_m3: getWaterDensity(), improveThreshold: 0.05 });
       if (bal && Array.isArray(bal.ballastAllocations) && bal.ballastAllocations.length) vMinTrimBallast = bal;
     }
-  } catch {}
+  } catch { }
 
   // Single-wing: if list/heel is broken, add counter-ballast on the opposite side; then optionally improve trim.
   try {
@@ -1559,7 +1572,7 @@ function computeVariants() {
       if (trim && Array.isArray(trim.ballastAllocations) && trim.ballastAllocations.length) cur = trim;
       vSingleWingAuto = (cur !== vWing) ? cur : null;
     }
-  } catch {}
+  } catch { }
 
   // Ballast optimization for single-max-empty variant
   try {
@@ -1571,20 +1584,20 @@ function computeVariants() {
       const use = bal || heel;
       if (use && Array.isArray(use.ballastAllocations) && use.ballastAllocations.length) vMaxEmptySingleBal = use;
     }
-  } catch {}
+  } catch { }
 
   // Only keep Even Keel if it meaningfully improves Trim vs Min Trim (or if Min Trim is absent)
   try {
     if (vEvenKeel && Array.isArray(vEvenKeel.allocations)) {
-      const ekM = computeHydroForAllocations(vEvenKeel.allocations||[]);
-      const mtM = (vMinTrim && Array.isArray(vMinTrim.allocations)) ? computeHydroForAllocations(vMinTrim.allocations||[]) : null;
+      const ekM = computeHydroForAllocations(vEvenKeel.allocations || []);
+      const mtM = (vMinTrim && Array.isArray(vMinTrim.allocations)) ? computeHydroForAllocations(vMinTrim.allocations || []) : null;
       if (ekM && isFinite(ekM.Trim)) {
         if (!mtM || !isFinite(mtM.Trim) || Math.abs(mtM.Trim) - Math.abs(ekM.Trim) > 1e-3) {
           vEvenKeelUse = vEvenKeel;
         }
       }
     }
-  } catch {}
+  } catch { }
 
   // Target Dmax helper: enumerate additional cargo-only subset plans under Dmax.
   // This helps surface feasible variants between min-k and all-tanks even-keel (e.g., the manual 19,303t case).
@@ -1720,20 +1733,20 @@ function computeVariants() {
         }
       }
     }
-  } catch {}
+  } catch { }
 
   function planSig(res) {
     if (!res || !Array.isArray(res.allocations)) return '';
     const cargoSig = res.allocations
-      .map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3||0).toFixed(3)}`)
+      .map(a => `${a.tank_id}:${a.parcel_id}:${(a.assigned_m3 || 0).toFixed(3)}`)
       .sort()
       .join('|');
     const ballast = (res.ballastAllocations || res.ballast_allocations) || [];
     const ballastSig = ballast.length
       ? '::B::' + ballast
-          .map(b => `${b.tank_id}:${(b.assigned_m3||0).toFixed(3)}`)
-          .sort()
-          .join('|')
+        .map(b => `${b.tank_id}:${(b.assigned_m3 || 0).toFixed(3)}`)
+        .sort()
+        .join('|')
       : '';
     return cargoSig + ballastSig;
   }
@@ -1741,14 +1754,14 @@ function computeVariants() {
     try {
       if (!res || !Array.isArray(res.allocations)) return false;
       const vmap = new Map();
-      res.allocations.forEach(a => vmap.set(a.tank_id, (vmap.get(a.tank_id)||0) + (a.assigned_m3||0)));
+      res.allocations.forEach(a => vmap.set(a.tank_id, (vmap.get(a.tank_id) || 0) + (a.assigned_m3 || 0)));
       const pairs = new Map(); // idx -> {P:vol,S:vol}
       for (const [tid, vol] of vmap.entries()) {
         const idx = cotPairIndex(tid);
         if (idx == null) continue;
         const side = /P$/.test(tid) ? 'P' : (/S$/.test(tid) ? 'S' : null);
         if (!side) continue;
-        const entry = pairs.get(idx) || { P:0, S:0 };
+        const entry = pairs.get(idx) || { P: 0, S: 0 };
         entry[side] += vol;
         pairs.set(idx, entry);
       }
@@ -1775,21 +1788,34 @@ function computeVariants() {
     engine_all_max: (vAllMax && requestedTons > 0 && (loadedTons(vAllMax) + 0.1 < requestedTons)) ? { id: 'Engine — All Max (short)', res: vAllMax } : undefined,
     // Alternatives at same minimal k
     ...Object.fromEntries(altList.map((r, i) => [
-      `engine_alt_${i+1}`,
-      { id: `Engine — Min Tanks Alt ${i+1}`, res: r }
+      `engine_alt_${i + 1}`,
+      { id: `Engine — Min Tanks Alt ${i + 1}`, res: r }
     ])),
+    // === EXHAUSTIVE PARETO-OPTIMAL PLANS ===
+    ...Object.fromEntries(exhaustivePlans.map((p, i) => {
+      const m = p.metrics || {};
+      const label = m.label || `Option ${i + 1}`;
+      const hint = `${m.emptyTankCount ?? '?'} empty | ${(m.deadSpace ?? 0).toFixed(0)}m³ dead`;
+      return [`pareto_${i + 1}`, {
+        id: `Pareto ${i + 1}: ${label} (${hint})`,
+        res: p
+      }];
+    })),
     engine_single_wing: vSingleWingAuto ? { id: 'Engine — Single-Wing (Auto Ballast)', res: vSingleWingAuto } : { id: 'Engine — Single-Wing (Cargo)', res: vWing },
     engine_min_k_aggressive: { id: 'Engine — Min Tanks (Aggressive)', res: vAgg },
     engine_max_remaining: { id: 'Engine — Max Cargo (All Max%)', res: vMax }
   };
-  
+
   // Filter: include Single-Wing only if truly single-wing; also dedupe identical results.
   const order = [
     'engine_min_k', 'engine_max_empty_single', 'engine_max_empty_single_ballast',
     'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2', 'engine_even_keel', 'engine_keep_slops_small',
-    'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
+    'engine_alt_1', 'engine_alt_2', 'engine_alt_3', 'engine_alt_4', 'engine_alt_5',
+    // Exhaustive Pareto-optimal plans
+    'pareto_1', 'pareto_2', 'pareto_3', 'pareto_4', 'pareto_5',
+    'pareto_6', 'pareto_7', 'pareto_8', 'pareto_9', 'pareto_10',
     'engine_single_wing',
-    'engine_min_k_aggressive','engine_max_remaining'
+    'engine_min_k_aggressive', 'engine_max_remaining'
   ];
   const seen = new Set();
   const out = {};
@@ -1807,7 +1833,7 @@ function computeVariants() {
   try {
     const usedSet = (res) => {
       const s = new Set();
-      (res.allocations||[]).forEach(a=>s.add(a.tank_id));
+      (res.allocations || []).forEach(a => s.add(a.tank_id));
       return Array.from(s).sort().join('|');
     };
     const minTrimKey = out['engine_min_trim'] ? usedSet(out['engine_min_trim'].res) : null;
@@ -1815,7 +1841,7 @@ function computeVariants() {
       const minKKey = usedSet(out['engine_min_k'].res);
       if (minKKey === minTrimKey) delete out['engine_min_k'];
     }
-  } catch {}
+  } catch { }
 
   // If Target Draft is enabled, only keep variants that satisfy max(F/M/A) <= target.
   try {
@@ -1831,7 +1857,7 @@ function computeVariants() {
       if (Object.keys(filtered).length > 0) return filtered;
       return {};
     }
-  } catch {}
+  } catch { }
   return out;
 }
 
@@ -1842,8 +1868,11 @@ function fillVariantSelect() {
     'engine_min_trim', 'engine_min_trim_ballast', 'engine_min_trim_alt_1', 'engine_min_trim_alt_2',
     'engine_dmax_1', 'engine_dmax_2', 'engine_dmax_3', 'engine_dmax_4', 'engine_dmax_5',
     'engine_even_keel', 'engine_keep_slops_small',
-    'engine_alt_1','engine_alt_2','engine_alt_3','engine_alt_4','engine_alt_5',
-    'engine_single_wing','engine_min_k_aggressive','engine_max_remaining'
+    'engine_alt_1', 'engine_alt_2', 'engine_alt_3', 'engine_alt_4', 'engine_alt_5',
+    // Exhaustive Pareto-optimal plans
+    'pareto_1', 'pareto_2', 'pareto_3', 'pareto_4', 'pareto_5',
+    'pareto_6', 'pareto_7', 'pareto_8', 'pareto_9', 'pareto_10',
+    'engine_single_wing', 'engine_min_k_aggressive', 'engine_max_remaining'
   ];
   const opts = order.filter(k => variantsCache[k])
     .map(k => ({ key: k, label: variantsCache[k].id }));
@@ -1854,7 +1883,7 @@ function fillVariantSelect() {
   }
   variantSelect.disabled = false;
   if (!opts.find(o => o.key === selectedVariantKey)) selectedVariantKey = opts[0]?.key || 'engine_min_k';
-  variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key===selectedVariantKey?'selected':''}>${o.label}</option>`).join('');
+  variantSelect.innerHTML = opts.map(o => `<option value="${o.key}" ${o.key === selectedVariantKey ? 'selected' : ''}>${o.label}</option>`).join('');
 }
 
 function computeAndRender() {
@@ -1886,8 +1915,8 @@ function computeAndRender() {
 function ensureUniqueParcelIDs() {
   const seen = new Set();
   parcels = parcels.map((p, idx) => {
-    let base = String(p.id || `P${idx+1}`).trim();
-    if (!base) base = `P${idx+1}`;
+    let base = String(p.id || `P${idx + 1}`).trim();
+    if (!base) base = `P${idx + 1}`;
     let unique = base;
     let n = 2;
     while (seen.has(unique)) unique = `${base}_${n++}`;
@@ -1979,15 +2008,15 @@ refreshPresetSelect();
 
 function autoLoadFirstPresetIfExists() {
   const presets = loadPresets();
-  const names = Object.keys(presets).sort((a,b)=>a.localeCompare(b));
+  const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
   if (names.length === 0) return false;
   const name = names[0];
   const conf = presets[name];
   if (!Array.isArray(conf)) return false;
   tanks = conf.map(t => ({ ...t }));
-  try { cfgSelect.value = `preset:${name}`; cfgNameInput.value = name; } catch {}
+  try { cfgSelect.value = `preset:${name}`; cfgNameInput.value = name; } catch { }
   // Apply meta if stored for this preset
-  try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch {}
+  try { const meta = loadShipMeta()[name]; if (meta) applyShipMeta(meta); } catch { }
   persistLastState();
   return true;
 }
@@ -2002,7 +2031,7 @@ try {
   if (!restored && cfgSelect && cfgSelect.value) {
     applySelectionValue(cfgSelect.value);
   }
-} catch {}
+} catch { }
 
 render();
 // Restore initial view from URL (#view or ?view=) or last view
@@ -2011,11 +2040,11 @@ try {
   const fromParam = (qs.get('view') || '').trim();
   const fromHash = (window.location.hash || '').replace(/^#/, '').trim();
   const candidate = fromParam || fromHash || localStorage.getItem(LS_VIEW) || 'cargo';
-  const allowed = new Set(['config','cargo','layout','shipdata']);
+  const allowed = new Set(['config', 'cargo', 'layout', 'shipdata']);
   setActiveView(allowed.has(candidate) ? candidate : 'cargo');
-} catch {}
+} catch { }
 // Auto-compute on load so Allocation/Layout stay populated after page switches
-try { computeAndRender(); } catch {}
+try { computeAndRender(); } catch { }
 
 // Build payload to transfer current plan to Ship Data (draft calculator)
 async function buildShipDataTransferPayload() {
@@ -2032,7 +2061,7 @@ async function buildShipDataTransferPayload() {
         const dk = Number(p.density_kg_m3);
         if (Number.isFinite(dk) && dk > 0) rhoByParcel.set(p.id, dk / 1000);
       });
-    } catch {}
+    } catch { }
     const allocs = res.allocations.map(a => {
       const vol = Number(a.assigned_m3);
       const wt = Number(a.weight_mt);
@@ -2058,19 +2087,19 @@ async function buildShipDataTransferPayload() {
       };
     });
     const ballast = Array.isArray(res.ballastAllocations) ? res.ballastAllocations.map(b => {
-      const vol = Number(b.assigned_m3)||0;
+      const vol = Number(b.assigned_m3) || 0;
       const rho = (rs && isFinite(rs.rho) && rs.rho > 0) ? Number(rs.rho) : 1.025;
       // try compute percent using BALLAST_TANKS cap_m3
       let pct = undefined;
       try {
-        const bt = (BALLAST_TANKS||[]).find(t => t.id === b.tank_id);
+        const bt = (BALLAST_TANKS || []).find(t => t.id === b.tank_id);
         if (bt && isFinite(bt.cap_m3) && bt.cap_m3 > 0) pct = (vol / bt.cap_m3) * 100;
-      } catch {}
+      } catch { }
       return {
         tank_id: b.tank_id,
         weight_mt: vol * rho,
         assigned_m3: vol,
-        percent: (isFinite(b.percent)?Number(b.percent):pct),
+        percent: (isFinite(b.percent) ? Number(b.percent) : pct),
         rho
       };
     }) : [];
@@ -2102,9 +2131,9 @@ async function buildShipDataTransferPayload() {
 
 function postShipDataMessage(frame, payload, targetOrigin) {
   const msg = { type: 'apply_stowage_plan', payload };
-  try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); } catch {}
+  try { frame.contentWindow.postMessage(msg, targetOrigin || '*'); } catch { }
   // Also send raw payload for receivers that listen to the payload directly
-  try { frame.contentWindow.postMessage(payload, targetOrigin || '*'); } catch {}
+  try { frame.contentWindow.postMessage(payload, targetOrigin || '*'); } catch { }
 }
 
 function waitForIframeReady(frame, timeoutMs = 2500) {
@@ -2114,15 +2143,15 @@ function waitForIframeReady(frame, timeoutMs = 2500) {
     const finish = () => {
       if (done) return;
       done = true;
-      try { if (timeoutId) clearTimeout(timeoutId); } catch {}
-      try { frame.removeEventListener('load', finish); } catch {}
+      try { if (timeoutId) clearTimeout(timeoutId); } catch { }
+      try { frame.removeEventListener('load', finish); } catch { }
       resolve();
     };
     // If same-origin and already loaded, return immediately
     try {
       if (frame && frame.contentDocument && frame.contentDocument.readyState === 'complete') { resolve(); return; }
-    } catch {}
-    try { frame.addEventListener('load', finish); } catch {}
+    } catch { }
+    try { frame.addEventListener('load', finish); } catch { }
     timeoutId = setTimeout(finish, timeoutMs);
   });
 }
@@ -2134,11 +2163,11 @@ async function postPlanToShipData() {
     const payload = await buildShipDataTransferPayload();
     if (!payload) { alert('No computed allocations to transfer. Run the planner first.'); return; }
     let targetOrigin = '*';
-    try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch {}
+    try { const u = new URL(frame.getAttribute('src') || '', window.location.href); targetOrigin = u.origin; } catch { }
     setActiveView('shipdata');
     // Ensure the iframe JS is ready; then send with retries (covers first-open race)
     await waitForIframeReady(frame, 2500);
-    try { postShipDataMessage(frame, payload, targetOrigin); } catch {}
+    try { postShipDataMessage(frame, payload, targetOrigin); } catch { }
   } catch (_) { alert('Transfer failed.'); }
 }
 
@@ -2165,8 +2194,8 @@ btnSaveCfg.addEventListener('click', () => {
   // Also save to a JSON file in project folder via dev server
   const today = new Date();
   const y = today.getFullYear();
-  const m = String(today.getMonth()+1).padStart(2,'0');
-  const d = String(today.getDate()).padStart(2,'0');
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
   const defaultFile = `ships_export_${y}-${m}-${d}.json`;
   saveConfigToFile(defaultFile, name, clean).then((resp) => {
     if (resp && resp.ok) {
@@ -2235,7 +2264,7 @@ if (fileImportCfg) {
             }
             saveShipMeta(metaStore);
           }
-        } catch {}
+        } catch { }
         // Optionally set the first imported ship as current
         if (importedNames.length > 0) {
           const firstName = importedNames[0];
@@ -2243,7 +2272,7 @@ if (fileImportCfg) {
           cfgNameInput.value = firstName;
           tanks = presets[firstName].map(t => ({ ...t }));
           // Apply ship meta if available
-          try { const meta = loadShipMeta()[firstName]; if (meta) applyShipMeta(meta); } catch {}
+          try { const meta = loadShipMeta()[firstName]; if (meta) applyShipMeta(meta); } catch { }
           persistLastState();
           render();
         }
@@ -2256,7 +2285,7 @@ if (fileImportCfg) {
         // Also try to extract single-ship meta if present
         try {
           const metaStore = loadShipMeta();
-          let prof = null; let name = (cfgNameInput.value||'').trim() || 'Imported Ship';
+          let prof = null; let name = (cfgNameInput.value || '').trim() || 'Imported Ship';
           if (json && json.ship && (json.tanks || json.hydrostatics)) prof = json;
           else if (Array.isArray(json) && json.length && json[0] && json[0].ship) prof = json[0];
           if (prof) {
@@ -2267,7 +2296,7 @@ if (fileImportCfg) {
               applyShipMeta(meta);
             }
           }
-        } catch {}
+        } catch { }
         persistLastState();
         render();
         alert('JSON dosyasından tank kapasiteleri içe aktarıldı.');
@@ -2286,8 +2315,8 @@ if (btnExportCfg) {
   btnExportCfg.addEventListener('click', () => {
     const today = new Date();
     const y = today.getFullYear();
-    const m = String(today.getMonth()+1).padStart(2,'0');
-    const d = String(today.getDate()).padStart(2,'0');
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const d = String(today.getDate()).padStart(2, '0');
     const filename = `ships_export_${y}-${m}-${d}.json`;
     const clean = tanks.map(t => ({ id: t.id, volume_m3: t.volume_m3, min_pct: t.min_pct, max_pct: t.max_pct, included: t.included, side: t.side }));
     const payload = { saved_at: today.toISOString(), name: (cfgNameInput.value || '').trim() || null, tanks: clean };
@@ -2349,7 +2378,7 @@ async function buildCompactExportText() {
     const cb = (APP_BUILD && APP_BUILD.cb) ? ` cb=${APP_BUILD.cb}` : '';
     const tag = (APP_BUILD && APP_BUILD.build_tag) ? APP_BUILD.build_tag : 'unknown';
     buildLine = `Build: ${tag}${cb}`;
-  } catch {}
+  } catch { }
 
   // Inputs (compact)
   const tankTokens = (tanks || []).map(t => {
@@ -2358,7 +2387,7 @@ async function buildCompactExportText() {
   });
   const parcelTokens = (parcels || []).map(p => {
     const fr = p.fill_remaining ? 1 : 0;
-    return `${p.id}(${(p.name||'').trim()}):V${fmtVol(p.total_m3||0)} R${fmtVol(p.density_kg_m3||0)} T${fmtVol(p.temperature_c||0)} FR${fr}`;
+    return `${p.id}(${(p.name || '').trim()}):V${fmtVol(p.total_m3 || 0)} R${fmtVol(p.density_kg_m3 || 0)} T${fmtVol(p.temperature_c || 0)} FR${fr}`;
   });
 
   const reverseLine = '';
@@ -2373,7 +2402,7 @@ async function buildCompactExportText() {
 
   // Allocations (only used tanks)
   const allocTokens = (res.allocations || [])
-    .map(a => `${a.tank_id}:${a.parcel_id}=${fmtVol(a.assigned_m3)}|F${Math.round((a.fill_pct||0)*100)}|W${fmtVol(a.weight_mt)}`);
+    .map(a => `${a.tank_id}:${a.parcel_id}=${fmtVol(a.assigned_m3)}|F${Math.round((a.fill_pct || 0) * 100)}|W${fmtVol(a.weight_mt)}`);
 
   // Minimal trace per parcel (chosen k)
   const trace = Array.isArray(di.reasoning_trace) ? di.reasoning_trace : [];
@@ -2395,8 +2424,8 @@ async function buildCompactExportText() {
   const sigBase = JSON.stringify({
     t: tanks.map(t => ({ id: t.id, v: t.volume_m3, a: t.min_pct, b: t.max_pct, i: !!t.included })),
     p: parcels.map(p => ({ id: p.id, v: p.total_m3, r: p.density_kg_m3, t: p.temperature_c, fr: !!p.fill_remaining })),
-    a: (res.allocations||[]).map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 })),
-    b: ((res.ballastAllocations||res.ballast_allocations)||[]).map(b => ({ t: b.tank_id, v: b.assigned_m3 }))
+    a: (res.allocations || []).map(a => ({ t: a.tank_id, p: a.parcel_id, v: a.assigned_m3 })),
+    b: ((res.ballastAllocations || res.ballast_allocations) || []).map(b => ({ t: b.tank_id, v: b.assigned_m3 }))
   });
   const sig = quickHash(sigBase);
 
@@ -2405,12 +2434,12 @@ async function buildCompactExportText() {
   // Hydro summary for export (if available)
   let hydroLine = null;
   try {
-    const m = computeHydroForAllocations([...(res.allocations||[]), ...((res.ballastAllocations||res.ballast_allocations)||[])]);
+    const m = computeHydroForAllocations([...(res.allocations || []), ...((res.ballastAllocations || res.ballast_allocations) || [])]);
     if (m) {
       const H = interpHydro(HYDRO_ROWS, m.Tm || 0) || {};
-      hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf||0).toFixed(3)} Tm=${(m.Tm||0).toFixed(3)} Ta=${(m.Ta||0).toFixed(3)} Trim=${(m.Trim||0).toFixed(3)} LCF=${isFinite(m.LCF)?m.LCF.toFixed(2):'-'} LBP=${isFinite(SHIP_PARAMS.LBP)?SHIP_PARAMS.LBP.toFixed(2):'-'} rho=${isFinite(SHIP_PARAMS.RHO_REF)?String(SHIP_PARAMS.RHO_REF):'1.025'}`;
+      hydroLine = `Hydro: DIS=${fmtVol(m.W_total)} DWT=${fmtVol(m.DWT)} Tf=${(m.Tf || 0).toFixed(3)} Tm=${(m.Tm || 0).toFixed(3)} Ta=${(m.Ta || 0).toFixed(3)} Trim=${(m.Trim || 0).toFixed(3)} LCF=${isFinite(m.LCF) ? m.LCF.toFixed(2) : '-'} LBP=${isFinite(SHIP_PARAMS.LBP) ? SHIP_PARAMS.LBP.toFixed(2) : '-'} rho=${isFinite(SHIP_PARAMS.RHO_REF) ? String(SHIP_PARAMS.RHO_REF) : '1.025'}`;
     }
-  } catch {}
+  } catch { }
   const lines = [
     hdr,
     (buildLine || null),
@@ -2421,7 +2450,7 @@ async function buildCompactExportText() {
     `Diag: P=${pwt} S=${swt} ${bstat} d%=${imb} warns=${wcount} errs=${ecount}`,
     `Alloc(${allocTokens.length}): ${allocTokens.join(' ')}`,
     // Ballast line
-    (((res.ballastAllocations||res.ballast_allocations)||[]).length ? `Ballast(${(res.ballastAllocations||res.ballast_allocations).length}): ${((res.ballastAllocations||res.ballast_allocations)||[]).map(b => `${b.tank_id}:${fmtVol(b.assigned_m3)}|${isFinite(b.percent)?Number(b.percent).toFixed(1)+'%':'?'}`).join(' ')}` : null),
+    (((res.ballastAllocations || res.ballast_allocations) || []).length ? `Ballast(${(res.ballastAllocations || res.ballast_allocations).length}): ${((res.ballastAllocations || res.ballast_allocations) || []).map(b => `${b.tank_id}:${fmtVol(b.assigned_m3)}|${isFinite(b.percent) ? Number(b.percent).toFixed(1) + '%' : '?'}`).join(' ')}` : null),
     traceTokens.length ? `Trace: ${traceTokens.join(' ')}` : null
   ].filter(Boolean);
   return lines.join('\n');
@@ -2442,7 +2471,7 @@ btnExportJson.addEventListener('click', async (ev) => {
       alert('Copied plan JSON to clipboard.');
       return;
     }
-  } catch {}
+  } catch { }
 
   const compact = await buildCompactExportText();
   try {
@@ -2470,10 +2499,10 @@ let LAST_MAX_CARGO_MT = null;
 // ---- Min-Trim optimizer (intra-selection; no band; min/max respected) ----
 function optimizeTrimWithinSelection(baseRes, opts) {
   try {
-    const options = Object.assign({ includeSlops: false }, opts||{});
+    const options = Object.assign({ includeSlops: false }, opts || {});
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     // Single fixed parcel only (keep scope tight)
-    const parcelIds = Array.from(new Set(baseRes.allocations.map(a=>a.parcel_id)));
+    const parcelIds = Array.from(new Set(baseRes.allocations.map(a => a.parcel_id)));
     if (parcelIds.length !== 1) return null;
     const pid = parcelIds[0];
     // Map tank limits
@@ -2486,19 +2515,19 @@ function optimizeTrimWithinSelection(baseRes, opts) {
     // Build per-tank volumes (only selected tanks)
     const vol = new Map();
     let totalV = 0;
-    for (const a of baseRes.allocations) { vol.set(a.tank_id, Number(a.assigned_m3)||0); totalV += Number(a.assigned_m3)||0; }
+    for (const a of baseRes.allocations) { vol.set(a.tank_id, Number(a.assigned_m3) || 0); totalV += Number(a.assigned_m3) || 0; }
     // Group used pairs
     const usedPairs = new Map(); // idx -> {P,S,lcg}
     for (const a of baseRes.allocations) {
       const id = a.tank_id; const idx = cotPairIndex(id);
       if (idx == null) continue;
-      const ent = usedPairs.get(idx) || { P:null, S:null, lcg:0 };
+      const ent = usedPairs.get(idx) || { P: null, S: null, lcg: 0 };
       if (/P$/.test(id)) ent.P = id; else if (/S$/.test(id)) ent.S = id;
       usedPairs.set(idx, ent);
     }
     // Only pairs with both sides; center tanks ignored
     const pairs = [];
-    const cotIdxs = Array.from(usedPairs.keys()).filter(i=>i<1000);
+    const cotIdxs = Array.from(usedPairs.keys()).filter(i => i < 1000);
     const minCot = cotIdxs.length ? Math.min(...cotIdxs) : 0;
     const maxCot = cotIdxs.length ? Math.max(...cotIdxs) : 0;
     const norm = (i) => (i >= 1000 ? maxCot + 1 : i);
@@ -2513,7 +2542,7 @@ function optimizeTrimWithinSelection(baseRes, opts) {
       pairs.push({ idx, P: ent.P, S: ent.S, lcg });
     }
     if (!pairs.length) return null;
-    pairs.sort((a,b)=>a.lcg - b.lcg); // aft..fwd
+    pairs.sort((a, b) => a.lcg - b.lcg); // aft..fwd
 
     // Helper: compute trim
     const makeAllocs = () => {
@@ -2521,7 +2550,7 @@ function optimizeTrimWithinSelection(baseRes, opts) {
       for (const [tid, v] of vol.entries()) {
         const t = tankById.get(tid); if (!t) continue;
         const parcel = pid;
-        const w = (v * ((parcels.find(p=>p.id===pid)?.density_kg_m3)||0)) / 1000.0;
+        const w = (v * ((parcels.find(p => p.id === pid)?.density_kg_m3) || 0)) / 1000.0;
         out.push({ tank_id: tid, parcel_id: parcel, assigned_m3: v, fill_pct: v / t.volume_m3, weight_mt: w });
       }
       return out;
@@ -2543,15 +2572,15 @@ function optimizeTrimWithinSelection(baseRes, opts) {
         const wantFwd = trim > 0; // +stern → need to move cargo forward
         // Try all donor/receiver pair combinations; pick first that improves
         let didOne = false;
-        const orderRecv = wantFwd ? [...pairs].sort((a,b)=>b.lcg - a.lcg) : [...pairs].sort((a,b)=>a.lcg - b.lcg);
-        const orderDon = wantFwd ? [...pairs].sort((a,b)=>a.lcg - b.lcg) : [...pairs].sort((a,b)=>b.lcg - a.lcg);
+        const orderRecv = wantFwd ? [...pairs].sort((a, b) => b.lcg - a.lcg) : [...pairs].sort((a, b) => a.lcg - b.lcg);
+        const orderDon = wantFwd ? [...pairs].sort((a, b) => a.lcg - b.lcg) : [...pairs].sort((a, b) => b.lcg - a.lcg);
         for (const pf of orderRecv) {
           for (const pa of orderDon) {
             if (pf.idx === pa.idx) continue;
             const limPf = lim.get(pf.P); const limSf = lim.get(pf.S);
             const limPa = lim.get(pa.P); const limSa = lim.get(pa.S);
-            const vPf = vol.get(pf.P)||0, vSf = vol.get(pf.S)||0;
-            const vPa = vol.get(pa.P)||0, vSa = vol.get(pa.S)||0;
+            const vPf = vol.get(pf.P) || 0, vSf = vol.get(pf.S) || 0;
+            const vPa = vol.get(pa.P) || 0, vSa = vol.get(pa.S) || 0;
             const addCap = Math.min((limPf.max - vPf), (limSf.max - vSf));
             const redCap = Math.min((vPa - limPa.min), (vSa - limSa.min));
             const delta = Math.min(addCap, redCap, step);
@@ -2579,8 +2608,8 @@ function optimizeTrimWithinSelection(baseRes, opts) {
     allocations.forEach(a => {
       const t = tankById.get(a.tank_id);
       if (!t) return;
-      if (t.side === 'port') port_weight_mt += (a.weight_mt||0);
-      if (t.side === 'starboard') starboard_weight_mt += (a.weight_mt||0);
+      if (t.side === 'port') port_weight_mt += (a.weight_mt || 0);
+      if (t.side === 'starboard') starboard_weight_mt += (a.weight_mt || 0);
     });
     const denom = port_weight_mt + starboard_weight_mt;
     const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
@@ -2593,7 +2622,7 @@ function optimizeTrimWithinSelection(baseRes, opts) {
 // ---- Ballast optimizer (adds seawater; cargo fixed) ----
 function optimizeBallastForTrim(baseRes, opts) {
   try {
-    const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05, stopEps: 0.002 }, opts||{});
+    const options = Object.assign({ rho_t_m3: 1.025, improveThreshold: 0.05, stopEps: 0.002 }, opts || {});
     if (!baseRes || !Array.isArray(baseRes.allocations) || baseRes.allocations.length === 0) return null;
     const existingBallast = (baseRes.ballastAllocations || baseRes.ballast_allocations) || [];
     const existingVol = new Map();
@@ -2604,23 +2633,23 @@ function optimizeBallastForTrim(baseRes, opts) {
     });
     // Helper: ballast meta and grouping
     const bmeta = loadBallastMeta ? loadBallastMeta() : {};
-    const getSide = (id)=> guessSideFromId(id) || null;
-    const baseKey = (s)=> String(s||'').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
+    const getSide = (id) => guessSideFromId(id) || null;
+    const baseKey = (s) => String(s || '').toUpperCase().replace(/(\s*\(?[PS]\)?\s*)$/, '').trim();
     // Build tank map and LCGs
-    const tankLCG = (id)=> {
+    const tankLCG = (id) => {
       let x0 = TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : NaN;
       if (!isFinite(x0)) {
-        try { const bt = (BALLAST_TANKS||[]).find(t=>t.id===id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch {}
+        try { const bt = (BALLAST_TANKS || []).find(t => t.id === id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch { }
       }
       return isFinite(x0) ? x0 : NaN;
     };
     // Effective headroom function from meta (min/max, preload)
     const effBounds = (bt) => {
       const m = bmeta[bt.id] || {};
-      const cap = Number(bt.cap_m3||0);
+      const cap = Number(bt.cap_m3 || 0);
       const minPct = isFinite(m.min_pct) ? m.min_pct : 0;
       const maxPct = isFinite(m.max_pct) ? m.max_pct : 1;
-      const pre = Number(m.preload_m3||0);
+      const pre = Number(m.preload_m3 || 0);
       const used = Math.max(0, pre) + (existingVol.get(bt.id) || 0);
       const minV = Math.max(0, cap * minPct - used);
       const maxV = Math.max(0, cap * maxPct - used);
@@ -2628,12 +2657,12 @@ function optimizeBallastForTrim(baseRes, opts) {
     };
     // Group ballast tanks by base key
     const groups = {};
-    (BALLAST_TANKS||[]).forEach(bt => {
+    (BALLAST_TANKS || []).forEach(bt => {
       const m = bmeta[bt.id] || {};
       const inc = m.included !== false; // default true
       if (!inc) return; // skip excluded ballast tanks
       const key = baseKey(bt.id);
-      if (!groups[key]) groups[key] = { P:null, S:null, centers:[], lcg:NaN };
+      if (!groups[key]) groups[key] = { P: null, S: null, centers: [], lcg: NaN };
       const side = getSide(bt.id);
       if (side === 'port') groups[key].P = bt; else if (side === 'starboard') groups[key].S = bt; else groups[key].centers.push(bt);
     });
@@ -2647,23 +2676,23 @@ function optimizeBallastForTrim(baseRes, opts) {
         const head = Math.min(bP.maxV, bS.maxV);
         if (head > 1e-6) {
           const xP = tankLCG(g.P.id), xS = tankLCG(g.S.id);
-          const lcg = isFinite(xP)&&isFinite(xS) ? (xP+xS)/2 : NaN;
-          pairs.push({ type:'pair', P: g.P, S: g.S, head, lcg });
+          const lcg = isFinite(xP) && isFinite(xS) ? (xP + xS) / 2 : NaN;
+          pairs.push({ type: 'pair', P: g.P, S: g.S, head, lcg });
         }
       }
       // centers
-      (g.centers||[]).forEach(ct => {
+      (g.centers || []).forEach(ct => {
         const bC = effBounds(ct);
         const head = bC.maxV;
         if (head > 1e-6) {
           const lcg = tankLCG(ct.id);
-          pairs.push({ type:'center', C: ct, head, lcg });
+          pairs.push({ type: 'center', C: ct, head, lcg });
         }
       });
     });
     if (!pairs.length) { return null; }
     // Initial hydro and allocations
-    const cargoAllocs = baseRes.allocations.map(a => ({...a}));
+    const cargoAllocs = baseRes.allocations.map(a => ({ ...a }));
     const ballastAllocs = []; // {tank_id, assigned_m3}
     const evalTrim = () => {
       const base = existingBallast.map(b => ({
@@ -2676,21 +2705,21 @@ function optimizeBallastForTrim(baseRes, opts) {
       return computeHydroForAllocations([
         ...cargoAllocs,
         ...base,
-        ...ballastAllocs.map(b=>({ tank_id:b.tank_id, parcel_id:'BALLAST', assigned_m3:b.assigned_m3, fill_pct:0, weight_mt: b.assigned_m3 * options.rho_t_m3 }))
+        ...ballastAllocs.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', assigned_m3: b.assigned_m3, fill_pct: 0, weight_mt: b.assigned_m3 * options.rho_t_m3 }))
       ]);
     };
     let met = evalTrim();
     if (!met || !isFinite(met.Trim)) return null;
     const startTrim = met.Trim;
     const steps = [200, 100, 50, 25, 10, 5, 2, 1, 0.5];
-    const eps=1e-6;
+    const eps = 1e-6;
     // Simple end-first strategy: fill from relevant end one group at a time
     for (const step of steps) {
       met = evalTrim();
       const wantFwd = met.Trim > 0; // +stern → add forward
-      const ordered = [...pairs].filter(p=>isFinite(p.lcg)).sort((a,b)=> (wantFwd ? (b.lcg - a.lcg) : (a.lcg - b.lcg)));
+      const ordered = [...pairs].filter(p => isFinite(p.lcg)).sort((a, b) => (wantFwd ? (b.lcg - a.lcg) : (a.lcg - b.lcg)));
       // Choose only the single best group (pair preferred, else center)
-      const best = ordered.find(g=>g.type==='pair') || ordered.find(g=>g.type==='center');
+      const best = ordered.find(g => g.type === 'pair') || ordered.find(g => g.type === 'center');
       if (!best) break;
       {
         const g = best;
@@ -2710,7 +2739,7 @@ function optimizeBallastForTrim(baseRes, opts) {
           let bestX = 0, bestT = Math.abs(t0);
           if (fhi != null && Math.abs(fhi) < bestT) { bestT = Math.abs(fhi); bestX = hi; }
           if (fhi != null && flo * fhi <= 0) {
-            for (let it=0; it<24; it++) {
+            for (let it = 0; it < 24; it++) {
               const mid = (lo + hi) / 2;
               const fm = f(mid);
               if (fm == null) break;
@@ -2736,21 +2765,21 @@ function optimizeBallastForTrim(baseRes, opts) {
             ballastAllocs.pop();
             return n2 ? n2.Trim : n.Trim;
           };
-          let lo=0, hi=Math.max(0,g.head);
+          let lo = 0, hi = Math.max(0, g.head);
           let t0 = evalTrim()?.Trim || 0;
-          let flo=t0, fhi=f(hi);
-          let bestX=0, bestT=Math.abs(t0);
-          if (fhi!=null && Math.abs(fhi)<bestT){ bestT=Math.abs(fhi); bestX=hi; }
-          if (fhi!=null && flo*fhi<=0) {
-            for (let it=0; it<24; it++){
-              const mid=(lo+hi)/2; const fm=f(mid); if (fm==null) break; const am=Math.abs(fm);
-              if (am<bestT){ bestT=am; bestX=mid; }
-              if (flo*fm<=0){ hi=mid; fhi=fm; } else { lo=mid; flo=fm; }
-              if (am<options.stopEps) break;
+          let flo = t0, fhi = f(hi);
+          let bestX = 0, bestT = Math.abs(t0);
+          if (fhi != null && Math.abs(fhi) < bestT) { bestT = Math.abs(fhi); bestX = hi; }
+          if (fhi != null && flo * fhi <= 0) {
+            for (let it = 0; it < 24; it++) {
+              const mid = (lo + hi) / 2; const fm = f(mid); if (fm == null) break; const am = Math.abs(fm);
+              if (am < bestT) { bestT = am; bestX = mid; }
+              if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+              if (am < options.stopEps) break;
             }
           }
           const add = Math.min(bestX, g.head);
-          if (add>eps) { ballastAllocs.push({ tank_id:g.C.id, assigned_m3: add }); g.head -= add; }
+          if (add > eps) { ballastAllocs.push({ tank_id: g.C.id, assigned_m3: add }); g.head -= add; }
         }
         // re-check trim; if near zero, stop early
         const now = evalTrim();
@@ -2765,12 +2794,12 @@ function optimizeBallastForTrim(baseRes, opts) {
     const allBallast = existingBallast
       .map(b => ({ tank_id: b.tank_id, assigned_m3: Number(b.assigned_m3) || 0, weight_mt: (Number(b.weight_mt) || ((Number(b.assigned_m3) || 0) * options.rho_t_m3)), percent: b.percent }))
       .concat(ballastAllocs.map(b => ({ tank_id: b.tank_id, assigned_m3: b.assigned_m3, weight_mt: b.assigned_m3 * options.rho_t_m3 })));
-    const allAllocs = [ ...cargoAllocs, ...allBallast.map(b=>({ tank_id:b.tank_id, parcel_id:'BALLAST', assigned_m3:b.assigned_m3, fill_pct:0, weight_mt: b.weight_mt })) ];
+    const allAllocs = [...cargoAllocs, ...allBallast.map(b => ({ tank_id: b.tank_id, parcel_id: 'BALLAST', assigned_m3: b.assigned_m3, fill_pct: 0, weight_mt: b.weight_mt }))];
     const hydro = computeHydroForAllocations(allAllocs);
     // P/S weights from combined allocations
     let port_weight_mt = 0, starboard_weight_mt = 0;
-    const byId = new Map(tanks.map(t=>[t.id,t]));
-    allAllocs.forEach(a => { const t = byId.get(a.tank_id); if (!t) return; if (t.side==='port') port_weight_mt += (a.weight_mt||0); if (t.side==='starboard') starboard_weight_mt += (a.weight_mt||0); });
+    const byId = new Map(tanks.map(t => [t.id, t]));
+    allAllocs.forEach(a => { const t = byId.get(a.tank_id); if (!t) return; if (t.side === 'port') port_weight_mt += (a.weight_mt || 0); if (t.side === 'starboard') starboard_weight_mt += (a.weight_mt || 0); });
     const denom = port_weight_mt + starboard_weight_mt;
     const imbalance_pct = denom > 0 ? (Math.abs(port_weight_mt - starboard_weight_mt) / denom) * 100 : 0;
     const balance_status = imbalance_pct <= 10 ? 'Balanced' : 'Warning';
@@ -2779,7 +2808,7 @@ function optimizeBallastForTrim(baseRes, opts) {
       starboard_weight_mt,
       balance_status,
       imbalance_pct,
-      reasoning_trace: (baseRes?.diagnostics?.reasoning_trace||[]).concat([{ parcel_id:'BALLAST', V: -1, Cmin: 0, Cmax: 0, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment:'none', per_tank_v:0, violates:false, reserved_pairs: [], reason: 'ballast optimization applied' }]),
+      reasoning_trace: (baseRes?.diagnostics?.reasoning_trace || []).concat([{ parcel_id: 'BALLAST', V: -1, Cmin: 0, Cmax: 0, k_low: 0, k_high: 0, chosen_k: 0, parity_adjustment: 'none', per_tank_v: 0, violates: false, reserved_pairs: [], reason: 'ballast optimization applied' }]),
       warnings: baseRes?.diagnostics?.warnings || [],
       errors: baseRes?.diagnostics?.errors || []
     };
@@ -2789,11 +2818,11 @@ function optimizeBallastForTrim(baseRes, opts) {
 // Helper: parse pair index including SLOPs for variant building
 function uiPairIndex(id) {
   try {
-    const s = String(id||'').toUpperCase();
+    const s = String(id || '').toUpperCase();
     const m = /COT(\d+)/.exec(s);
-    if (m) return parseInt(m[1],10);
+    if (m) return parseInt(m[1], 10);
     if (s === 'SLOPP' || s === 'SLOPS') return 1000;
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -2813,7 +2842,7 @@ function applyDraftToggleUI() {
         rsTargetDraftEl.value = prev != null ? prev : '10.5';
       }
     }
-  } catch {}
+  } catch { }
 }
 
 function getRSInputs() {
@@ -2860,7 +2889,7 @@ function updateFRParcelFromInputs() {
       parcels[idx] = { ...parcels[idx], total_m3: vol };
       return true;
     }
-  } catch {}
+  } catch { }
   return false;
 }
 
@@ -2910,14 +2939,14 @@ function updateMaxCargoView() {
     // include preloads total weight
     let preW = 0;
     try {
-      for (const t of tanks||[]) {
-        const v = Number(t?.preload_m3)||0; const r = Number(t?.preload_density_kg_m3)||0;
-        if (v>0 && r>0) preW += (v*r)/1000.0;
+      for (const t of tanks || []) {
+        const v = Number(t?.preload_m3) || 0; const r = Number(t?.preload_density_kg_m3) || 0;
+        if (v > 0 && r > 0) preW += (v * r) / 1000.0;
       }
       const bmeta = loadBallastMeta ? loadBallastMeta() : {};
-      Object.keys(bmeta||{}).forEach(id => { const m=bmeta[id]||{}; const v=Number(m.preload_m3)||0; const r=Number(m.preload_density_kg_m3)||0; if (v>0&&r>0) preW += (v*r)/1000.0; });
-    } catch {}
-    const others = light + (fo||0) + (fw||0) + (oth||0) + (constW||0) + preW;
+      Object.keys(bmeta || {}).forEach(id => { const m = bmeta[id] || {}; const v = Number(m.preload_m3) || 0; const r = Number(m.preload_density_kg_m3) || 0; if (v > 0 && r > 0) preW += (v * r) / 1000.0; });
+    } catch { }
+    const others = light + (fo || 0) + (fw || 0) + (oth || 0) + (constW || 0) + preW;
     const cargoMax = Math.max(0, W_dis - others);
     LAST_MAX_CARGO_MT = cargoMax;
     rsMaxCargoEl.textContent = `Max cargo (mean): ${cargoMax.toLocaleString(undefined, { maximumFractionDigits: 0 })} mt`;
@@ -2935,30 +2964,30 @@ try {
   [rsTargetDraftEl, rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
     .filter(Boolean)
     .forEach(el => el.addEventListener('input', updateMaxCargoView));
-} catch {}
-try { if (rsEnableEl) rsEnableEl.addEventListener('change', updateMaxCargoView); } catch {}
+} catch { }
+try { if (rsEnableEl) rsEnableEl.addEventListener('change', updateMaxCargoView); } catch { }
 // Recompute hydro summary when RS inputs change (draft/trim reflect FO/FW/OTH/CONST/ρ)
 try {
-  const reHydro = () => { try { renderSummaryAndSvg(currentPlanResult); } catch {} };
+  const reHydro = () => { try { renderSummaryAndSvg(currentPlanResult); } catch { } };
   [rsRhoEl, rsFoEl, rsFwEl, rsOthEl, rsConstEl, rsConstLcgEl]
     .filter(Boolean)
     .forEach(el => el.addEventListener('input', reHydro));
-} catch {}
-try { updateMaxCargoView(); } catch {}
+} catch { }
+try { updateMaxCargoView(); } catch { }
 
 function interpHydro(rows, T) {
   try {
     if (!rows || rows.length === 0 || !isFinite(T)) return null;
-    const rr = rows.slice().sort((a,b)=>a.draft_m-b.draft_m);
+    const rr = rows.slice().sort((a, b) => a.draft_m - b.draft_m);
     const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
     const toFW = (r) => (typeof r.dis_fw === 'number') ? r.dis_fw : ((typeof r.dis_sw === 'number') ? (r.dis_sw / rho_ref) : undefined);
-    if (T <= rr[0].draft_m) { const r=rr[0]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) }; }
-    if (T >= rr[rr.length - 1].draft_m) { const r=rr[rr.length-1]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) }; }
+    if (T <= rr[0].draft_m) { const r = rr[0]; return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: toFW(r) }; }
+    if (T >= rr[rr.length - 1].draft_m) { const r = rr[rr.length - 1]; return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: toFW(r) }; }
     let lo = 0, hi = rr.length - 1;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (rr[mid].draft_m <= T) lo = mid; else hi = mid; }
     const a = rr[lo], b = rr[hi];
     const t = (T - a.draft_m) / (b.draft_m - a.draft_m);
-    const lerp = (x,y)=> x + (y - x) * t;
+    const lerp = (x, y) => x + (y - x) * t;
     const aFW = toFW(a), bFW = toFW(b);
     const DIS_FW = (isFinite(aFW) && isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
     return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW };
@@ -2992,25 +3021,25 @@ function computeHydroForAllocations(allocations) {
   // Safe linear interpolation against hydro table (guards against any external mutation)
   function interpHydroSafe(rows, T) {
     try {
-      const rr = Array.isArray(rows) ? rows.slice().sort((a,b)=>a.draft_m-b.draft_m) : [];
+      const rr = Array.isArray(rows) ? rows.slice().sort((a, b) => a.draft_m - b.draft_m) : [];
       if (!rr.length || !isFinite(T)) return null;
       const rho_ref = SHIP_PARAMS.RHO_REF || 1.025;
       const toFW = (r) => (typeof r.dis_fw === 'number') ? r.dis_fw : ((typeof r.dis_sw === 'number') ? (r.dis_sw / rho_ref) : undefined);
       // clamp
       if (T <= rr[0].draft_m) {
-        const r=rr[0]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) };
+        const r = rr[0]; return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: toFW(r) };
       }
-      if (T >= rr[rr.length-1].draft_m) {
-        const r=rr[rr.length-1]; return { LCF:r.lcf_m, LCB:r.lcb_m, TPC:r.tpc, MCT1cm:r.mct, DIS_FW: toFW(r) };
+      if (T >= rr[rr.length - 1].draft_m) {
+        const r = rr[rr.length - 1]; return { LCF: r.lcf_m, LCB: r.lcb_m, TPC: r.tpc, MCT1cm: r.mct, DIS_FW: toFW(r) };
       }
-      let lo=0, hi=rr.length-1;
-      while (hi-lo>1) { const mid=(lo+hi)>>1; if (rr[mid].draft_m<=T) lo=mid; else hi=mid; }
-      const a=rr[lo], b=rr[hi];
-      const t=(T-a.draft_m)/(b.draft_m-a.draft_m);
-      const lerp=(x,y)=> x + (y-x)*t;
+      let lo = 0, hi = rr.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (rr[mid].draft_m <= T) lo = mid; else hi = mid; }
+      const a = rr[lo], b = rr[hi];
+      const t = (T - a.draft_m) / (b.draft_m - a.draft_m);
+      const lerp = (x, y) => x + (y - x) * t;
       const aFW = toFW(a), bFW = toFW(b);
-      const DIS_FW = (isFinite(aFW)&&isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
-      return { LCF: lerp(a.lcf_m,b.lcf_m), LCB: lerp(a.lcb_m,b.lcb_m), TPC: lerp(a.tpc,b.tpc), MCT1cm: lerp(a.mct,b.mct), DIS_FW };
+      const DIS_FW = (isFinite(aFW) && isFinite(bFW)) ? lerp(aFW, bFW) : undefined;
+      return { LCF: lerp(a.lcf_m, b.lcf_m), LCB: lerp(a.lcb_m, b.lcb_m), TPC: lerp(a.tpc, b.tpc), MCT1cm: lerp(a.mct, b.mct), DIS_FW };
     } catch { return null; }
   }
   // Build items (include consumables and constant from Cargo Input)
@@ -3024,10 +3053,10 @@ function computeHydroForAllocations(allocations) {
       if (isFinite(rs.constW)) constW = Number(rs.constW) || 0;
       if (isFinite(rs.constX)) constX = Number(rs.constX);
     }
-  } catch {}
+  } catch { }
   // Use user-provided water density if available; else fall back to ship's ref density
   let rho_ref = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : 1.025;
-  try { const rs = getRSInputs ? getRSInputs() : null; if (rs && isFinite(rs.rho) && rs.rho > 0) rho_ref = Number(rs.rho); } catch {}
+  try { const rs = getRSInputs ? getRSInputs() : null; if (rs && isFinite(rs.rho) && rs.rho > 0) rho_ref = Number(rs.rho); } catch { }
   let W = 0, Mx = 0;
   const LCG_BIAS = getLCGBias();
   const ballastIdSet = new Set((BALLAST_TANKS || []).map(t => t && t.id).filter(Boolean));
@@ -3043,7 +3072,7 @@ function computeHydroForAllocations(allocations) {
     }
     let x0 = TANK_LCG_MAP.has(a.tank_id) ? Number(TANK_LCG_MAP.get(a.tank_id)) : NaN;
     if (!isFinite(x0)) {
-      try { const bt = (BALLAST_TANKS||[]).find(t=>t.id===a.tank_id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch {}
+      try { const bt = (BALLAST_TANKS || []).find(t => t.id === a.tank_id); if (bt && isFinite(bt.lcg)) x0 = Number(bt.lcg); } catch { }
     }
     const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS;
     W += w;
@@ -3051,10 +3080,10 @@ function computeHydroForAllocations(allocations) {
   });
   // preloads: treat as virtual cargo at tank LCGs
   try {
-    for (const t of tanks||[]) {
-      const v = Number(t?.preload_m3)||0; const r = Number(t?.preload_density_kg_m3)||0;
-      if (v>0 && r>0) {
-        const w = (v*r)/1000.0;
+    for (const t of tanks || []) {
+      const v = Number(t?.preload_m3) || 0; const r = Number(t?.preload_density_kg_m3) || 0;
+      if (v > 0 && r > 0) {
+        const w = (v * r) / 1000.0;
         const x0 = TANK_LCG_MAP.has(t.id) ? Number(TANK_LCG_MAP.get(t.id)) : 0;
         const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS;
         W += w; Mx += w * (isFinite(x) ? x : 0);
@@ -3062,22 +3091,22 @@ function computeHydroForAllocations(allocations) {
     }
     // ballast preloads (from editor meta)
     const bmeta = loadBallastMeta ? loadBallastMeta() : {};
-    Object.keys(bmeta||{}).forEach(id => {
-      const m = bmeta[id]||{}; const v=Number(m.preload_m3)||0; const r=Number(m.preload_density_kg_m3)||0;
-      if (v>0 && r>0){ const w=(v*r)/1000.0; const x0 = TANK_LCG_MAP.has(id)?Number(TANK_LCG_MAP.get(id)):0; const x = isFinite(x0)?(x0+LCG_BIAS):LCG_BIAS; W+=w; Mx+= w * (isFinite(x)?x:0); }
+    Object.keys(bmeta || {}).forEach(id => {
+      const m = bmeta[id] || {}; const v = Number(m.preload_m3) || 0; const r = Number(m.preload_density_kg_m3) || 0;
+      if (v > 0 && r > 0) { const w = (v * r) / 1000.0; const x0 = TANK_LCG_MAP.has(id) ? Number(TANK_LCG_MAP.get(id)) : 0; const x = isFinite(x0) ? (x0 + LCG_BIAS) : LCG_BIAS; W += w; Mx += w * (isFinite(x) ? x : 0); }
     });
-  } catch {}
+  } catch { }
   // consumables — use per-type LCGs when available; else fallback to average
   const cons = {
-    fo: { w: (fo||0), x: (isFinite(SHIP_PARAMS.LCG_FO) ? SHIP_PARAMS.LCG_FO : null) },
-    fw: { w: (fw||0), x: (isFinite(SHIP_PARAMS.LCG_FW) ? SHIP_PARAMS.LCG_FW : null) },
-    oth:{ w: (oth||0), x: (isFinite(SHIP_PARAMS.LCG_OTH)? SHIP_PARAMS.LCG_OTH: null) }
+    fo: { w: (fo || 0), x: (isFinite(SHIP_PARAMS.LCG_FO) ? SHIP_PARAMS.LCG_FO : null) },
+    fw: { w: (fw || 0), x: (isFinite(SHIP_PARAMS.LCG_FW) ? SHIP_PARAMS.LCG_FW : null) },
+    oth: { w: (oth || 0), x: (isFinite(SHIP_PARAMS.LCG_OTH) ? SHIP_PARAMS.LCG_OTH : null) }
   };
   const consW = cons.fo.w + cons.fw.w + cons.oth.w;
   W += consW;
-  const consMomentKnown = (cons.fo.w && cons.fo.x != null ? cons.fo.w*cons.fo.x : 0)
-                        + (cons.fw.w && cons.fw.x != null ? cons.fw.w*cons.fw.x : 0)
-                        + (cons.oth.w&& cons.oth.x!= null ? cons.oth.w*cons.oth.x: 0);
+  const consMomentKnown = (cons.fo.w && cons.fo.x != null ? cons.fo.w * cons.fo.x : 0)
+    + (cons.fw.w && cons.fw.x != null ? cons.fw.w * cons.fw.x : 0)
+    + (cons.oth.w && cons.oth.x != null ? cons.oth.w * cons.oth.x : 0);
   if (consMomentKnown !== 0) {
     Mx += consMomentKnown;
   } else if (isFinite(SHIP_PARAMS.LCG_FO_FW)) {
@@ -3099,7 +3128,7 @@ function computeHydroForAllocations(allocations) {
   const Hship = computeHydroShip(rowsUse, W, LCG, LBP, rho_ref);
   if (!Hship) return null;
   const DWT = isFinite(LIGHT_SHIP.weight_mt) ? (W - LIGHT_SHIP.weight_mt) : W;
-  return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP? (LBP/2)+(Hship.LCF||0):undefined), dFP: (LBP? (LBP/2)-(Hship.LCF||0):undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
+  return { W_total: W, DWT, Tf: Hship.Tf, Tm: Hship.Tm, Ta: Hship.Ta, Trim: Hship.Trim, LCG_total: LCG, LCB: Hship.LCB, LCF: Hship.LCF, MCT1cm: Hship.MCT1cm, TPC: Hship.TPC, dAP: (LBP ? (LBP / 2) + (Hship.LCF || 0) : undefined), dFP: (LBP ? (LBP / 2) - (Hship.LCF || 0) : undefined), LCG_bias: LCG_BIAS, hydro_version: 'shipdata_core' };
 }
 
 function getTargetDraftMax() {
@@ -3116,7 +3145,7 @@ function getWaterDensity() {
     const rs = getRSInputs ? getRSInputs() : null;
     const rho = rs ? Number(rs.rho) : NaN;
     if (Number.isFinite(rho) && rho > 0) return rho;
-  } catch {}
+  } catch { }
   const rhoRef = (typeof SHIP_PARAMS.RHO_REF === 'number' && SHIP_PARAMS.RHO_REF > 0) ? SHIP_PARAMS.RHO_REF : NaN;
   return Number.isFinite(rhoRef) ? rhoRef : 1.025;
 }
@@ -3280,14 +3309,14 @@ function optimizeBallastForHeel(baseRes, opts) {
 }
 
 function cargoWeightMT(res) {
-  try { return (res?.allocations || []).reduce((s,a)=> s + (Number(a?.weight_mt) || 0), 0); } catch { return 0; }
+  try { return (res?.allocations || []).reduce((s, a) => s + (Number(a?.weight_mt) || 0), 0); } catch { return 0; }
 }
 
 function ballastWeightMT(res) {
   try {
     const rho = getWaterDensity();
     const ballast = (res?.ballastAllocations || res?.ballast_allocations) || [];
-    return ballast.reduce((s,b) => {
+    return ballast.reduce((s, b) => {
       const w = Number(b?.weight_mt);
       if (Number.isFinite(w)) return s + w;
       const v = Number(b?.assigned_m3);
@@ -3338,7 +3367,7 @@ function solveFillRemainingForTargetDmax(targetDraft) {
     // Upper bound: total cargo Cmax across included tanks
     const capM3 = (tanks || [])
       .filter(t => t && (t.included !== false))
-      .reduce((s,t)=> s + (Number(t.volume_m3)||0) * (Number(t.max_pct)||0), 0);
+      .reduce((s, t) => s + (Number(t.volume_m3) || 0) * (Number(t.max_pct) || 0), 0);
     let lo = 0;
     let hi = Number.isFinite(capM3) && capM3 > 0 ? capM3 : Math.max(0, Number(baseParcels[frIdx]?.total_m3) || 0);
     if (!(hi > 0)) hi = Math.max(1, Number(baseParcels[frIdx]?.total_m3) || 1);

@@ -1452,3 +1452,369 @@ export function summarizeAllocations(allocations) {
   }
   return m;
 }
+
+// ============================================================================
+// EXHAUSTIVE DISTRIBUTION ALGORITHM — Multi-Criteria Pareto Ranking
+// ============================================================================
+
+/**
+ * @typedef {Object} PlanMetrics
+ * @property {number} emptyTankCount — number of unused tanks (higher = better for cleaning)
+ * @property {number} tanksUsed — number of tanks with cargo
+ * @property {number} deadSpace — locked capacity minus assigned (lower = better)
+ * @property {number} balanceDiff — |port_weight - starboard_weight| in MT
+ * @property {number} totalAssigned — total volume assigned in m³
+ * @property {number[]} usedPairIndices — pair indices used
+ * @property {string} label — human-readable description of tank selection
+ */
+
+/**
+ * @typedef {Object} RankedPlan
+ * @property {Allocation[]} allocations
+ * @property {PlanDiagnostics} diagnostics
+ * @property {PlanMetrics} metrics
+ * @property {number[]} pairSelection — pair indices used
+ * @property {Tank|null} centerUsed — center tank if used
+ */
+
+/**
+ * Enumerate all feasible pair subset combinations for a given volume.
+ * Returns array of feasible plans with allocations and metrics.
+ * 
+ * @param {Tank[]} tanks
+ * @param {Parcel[]} parcels
+ * @param {Object} policy
+ * @param {Object} opts — { timeBudgetMs, maxResults }
+ * @returns {RankedPlan[]}
+ */
+export function enumerateAllFeasiblePlans(tanks, parcels, policy = {}, opts = {}) {
+  const timeBudgetMs = opts.timeBudgetMs ?? 200;
+  const maxResults = opts.maxResults ?? 500;
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  
+  const { pairs, centers, included } = groupTanks(tanks);
+  const preloads = (policy && policy.preloads) || {};
+  const getPreload = (t) => Math.max(0, (preloads[t.id]?.v || 0));
+  const effMin = (t) => Math.max(0, (t.volume_m3 * t.min_pct) - getPreload(t));
+  const effMax = (t) => Math.max(0, (t.volume_m3 * t.max_pct) - getPreload(t));
+  
+  // Get all available pair indices
+  const pairIndices = Object.keys(pairs)
+    .map(n => parseInt(n, 10))
+    .filter(n => pairs[n] && pairs[n].port && pairs[n].starboard)
+    .sort((a, b) => a - b);
+  
+  const n = pairIndices.length;
+  if (n === 0) return [];
+  
+  // Fixed parcels — currently support single fixed parcel for exhaustive search
+  const fixed = parcels.filter(p => !p.fill_remaining);
+  if (fixed.length === 0) return [];
+  const parcel = fixed[0];
+  const V = Number(parcel.total_m3) || 0;
+  if (V <= 0) return [];
+  
+  const results = [];
+  const seenSigs = new Set();
+  
+  // Helper: generate allocation signature for dedup
+  const allocSig = (allocs) => allocs
+    .map(a => `${a.tank_id}:${a.assigned_m3.toFixed(2)}`)
+    .sort()
+    .join('|');
+  
+  // Helper: compute label from pair indices
+  const labelFromPairs = (pairIdxs, centerTank) => {
+    const parts = pairIdxs
+      .slice()
+      .sort((a, b) => a - b)
+      .map(i => (i >= 1000 ? 'SLOP' : `COT${i}`));
+    if (centerTank) parts.push(centerTank.id);
+    return parts.join('+');
+  };
+  
+  // Helper: water-fill distribution for a given set of tanks
+  const waterFill = (tankList, volume, parcelObj) => {
+    const vessels = tankList.map(t => ({
+      tank: t,
+      min: effMin(t),
+      max: effMax(t),
+      vol: 0
+    }));
+    
+    const sumMin = vessels.reduce((s, e) => s + e.min, 0);
+    const sumMax = vessels.reduce((s, e) => s + e.max, 0);
+    
+    // Check feasibility
+    if (volume < sumMin - 1e-6 || volume > sumMax + 1e-6) {
+      return null; // infeasible
+    }
+    
+    // Start at mins
+    vessels.forEach(e => { e.vol = e.min; });
+    let rem = volume - sumMin;
+    
+    // Water-fill remaining
+    while (rem > 1e-9) {
+      const unsat = vessels.filter(e => e.vol + 1e-9 < e.max);
+      if (unsat.length === 0) break;
+      const delta = rem / unsat.length;
+      let consumed = 0;
+      for (const e of unsat) {
+        const add = Math.min(delta, e.max - e.vol);
+        e.vol += add;
+        consumed += add;
+      }
+      rem -= consumed;
+      if (consumed <= 1e-9) break;
+    }
+    
+    // Build allocations
+    const allocations = [];
+    for (const e of vessels) {
+      if (e.vol <= 1e-9) continue;
+      const fill_pct = e.vol / e.tank.volume_m3;
+      const weight_mt = (e.vol * parcelObj.density_kg_m3) / 1000.0;
+      allocations.push({
+        tank_id: e.tank.id,
+        parcel_id: parcelObj.id,
+        assigned_m3: e.vol,
+        fill_pct,
+        weight_mt
+      });
+    }
+    
+    return allocations;
+  };
+  
+  // Enumerate all pair subsets via bitmask
+  const maxMask = (1 << n) - 1;
+  
+  for (let mask = 1; mask <= maxMask; mask++) {
+    // Time budget check
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - t0 > timeBudgetMs) break;
+    if (results.length >= maxResults) break;
+    
+    // Extract selected pair indices
+    const selectedPairs = [];
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) selectedPairs.push(pairIndices[i]);
+    }
+    
+    // Collect tanks from selected pairs
+    const tankList = [];
+    for (const idx of selectedPairs) {
+      const pr = pairs[idx];
+      if (pr.port) tankList.push(pr.port);
+      if (pr.starboard) tankList.push(pr.starboard);
+    }
+    
+    // Try without center
+    let allocs = waterFill(tankList, V, parcel);
+    if (allocs && allocs.length > 0) {
+      const sig = allocSig(allocs);
+      if (!seenSigs.has(sig)) {
+        seenSigs.add(sig);
+        results.push({
+          allocations: allocs,
+          pairSelection: selectedPairs,
+          centerUsed: null,
+          label: labelFromPairs(selectedPairs, null)
+        });
+      }
+    }
+    
+    // Try with each available center
+    for (const center of centers) {
+      const tankListWithCenter = [...tankList, center];
+      allocs = waterFill(tankListWithCenter, V, parcel);
+      if (allocs && allocs.length > 0) {
+        const sig = allocSig(allocs);
+        if (!seenSigs.has(sig)) {
+          seenSigs.add(sig);
+          results.push({
+            allocations: allocs,
+            pairSelection: selectedPairs,
+            centerUsed: center,
+            label: labelFromPairs(selectedPairs, center)
+          });
+        }
+      }
+    }
+  }
+  
+  // Compute metrics for each result
+  const totalTankCount = included.length;
+  
+  for (const r of results) {
+    const usedTankIds = new Set(r.allocations.map(a => a.tank_id));
+    const emptyTankCount = totalTankCount - usedTankIds.size;
+    const tanksUsed = usedTankIds.size;
+    
+    // Dead space = sum of max capacity of used tanks - sum of assigned
+    let cmaxUsed = 0, assignedSum = 0;
+    for (const a of r.allocations) {
+      const t = included.find(tt => tt.id === a.tank_id);
+      if (t) cmaxUsed += t.volume_m3 * t.max_pct;
+      assignedSum += a.assigned_m3;
+    }
+    const deadSpace = Math.max(0, cmaxUsed - assignedSum);
+    
+    // Balance
+    let portWeight = 0, starboardWeight = 0;
+    for (const a of r.allocations) {
+      const t = included.find(tt => tt.id === a.tank_id);
+      if (!t) continue;
+      if (t.side === 'port') portWeight += a.weight_mt;
+      if (t.side === 'starboard') starboardWeight += a.weight_mt;
+    }
+    const balanceDiff = Math.abs(portWeight - starboardWeight);
+    
+    r.metrics = {
+      emptyTankCount,
+      tanksUsed,
+      deadSpace,
+      balanceDiff,
+      totalAssigned: assignedSum,
+      usedPairIndices: r.pairSelection,
+      label: r.label
+    };
+    
+    // Build diagnostics
+    r.diagnostics = {
+      port_weight_mt: portWeight,
+      starboard_weight_mt: starboardWeight,
+      balance_status: balanceDiff / (portWeight + starboardWeight + 1e-9) <= 0.1 ? 'Balanced' : 'Warning',
+      imbalance_pct: (portWeight + starboardWeight) > 0 
+        ? (balanceDiff / (portWeight + starboardWeight)) * 100 
+        : 0,
+      reasoning_trace: [{
+        parcel_id: parcel.id,
+        V,
+        Cmin: 0,
+        Cmax: 0,
+        k_low: 0,
+        k_high: 0,
+        chosen_k: tanksUsed,
+        parity_adjustment: 'none',
+        per_tank_v: tanksUsed > 0 ? V / tanksUsed : 0,
+        violates: false,
+        reserved_pairs: [r.label],
+        reason: 'exhaustive enumeration'
+      }],
+      warnings: [],
+      errors: []
+    };
+  }
+  
+  return results;
+}
+
+/**
+ * Check if plan A dominates plan B (A is better or equal in all criteria, strictly better in at least one).
+ * Lower is better for: tanksUsed, deadSpace, balanceDiff
+ * Higher is better for: emptyTankCount
+ */
+function dominates(a, b) {
+  const ma = a.metrics;
+  const mb = b.metrics;
+  
+  // For minimization criteria: a <= b means a is at least as good
+  const tanksOk = ma.tanksUsed <= mb.tanksUsed;
+  const deadOk = ma.deadSpace <= mb.deadSpace;
+  const balanceOk = ma.balanceDiff <= mb.balanceDiff;
+  // For maximization: a >= b means a is at least as good
+  const emptyOk = ma.emptyTankCount >= mb.emptyTankCount;
+  
+  const allOk = tanksOk && deadOk && balanceOk && emptyOk;
+  if (!allOk) return false;
+  
+  // Check if strictly better in at least one
+  const tanksBetter = ma.tanksUsed < mb.tanksUsed;
+  const deadBetter = ma.deadSpace < mb.deadSpace;
+  const balanceBetter = ma.balanceDiff < mb.balanceDiff;
+  const emptyBetter = ma.emptyTankCount > mb.emptyTankCount;
+  
+  return tanksBetter || deadBetter || balanceBetter || emptyBetter;
+}
+
+/**
+ * Filter to keep only Pareto-optimal solutions (non-dominated).
+ * @param {RankedPlan[]} plans
+ * @returns {RankedPlan[]}
+ */
+export function paretoFilter(plans) {
+  if (plans.length === 0) return [];
+  
+  const dominated = new Set();
+  
+  for (let i = 0; i < plans.length; i++) {
+    if (dominated.has(i)) continue;
+    for (let j = 0; j < plans.length; j++) {
+      if (i === j || dominated.has(j)) continue;
+      if (dominates(plans[i], plans[j])) {
+        dominated.add(j);
+      }
+    }
+  }
+  
+  return plans.filter((_, i) => !dominated.has(i));
+}
+
+/**
+ * Rank plans by weighted score. Lower score = better.
+ * @param {RankedPlan[]} plans
+ * @param {Object} weights — { tanksUsed, deadSpace, balanceDiff, emptyTankCount }
+ * @returns {RankedPlan[]}
+ */
+export function rankByWeightedScore(plans, weights = {}) {
+  const w = {
+    tanksUsed: weights.tanksUsed ?? 1.0,
+    deadSpace: weights.deadSpace ?? 0.001, // per m³
+    balanceDiff: weights.balanceDiff ?? 0.1, // per MT
+    emptyTankCount: weights.emptyTankCount ?? -0.5 // negative because higher is better
+  };
+  
+  // Compute score for each plan
+  const scored = plans.map(p => ({
+    plan: p,
+    score: (
+      w.tanksUsed * p.metrics.tanksUsed +
+      w.deadSpace * p.metrics.deadSpace +
+      w.balanceDiff * p.metrics.balanceDiff +
+      w.emptyTankCount * p.metrics.emptyTankCount
+    )
+  }));
+  
+  scored.sort((a, b) => a.score - b.score);
+  
+  return scored.map(s => s.plan);
+}
+
+/**
+ * Main entry point: compute all viable plans with Pareto filtering.
+ * 
+ * @param {Tank[]} tanks
+ * @param {Parcel[]} parcels
+ * @param {Object} policy
+ * @param {Object} opts — { timeBudgetMs, maxResults, topN, weights }
+ * @returns {RankedPlan[]}
+ */
+export function computeAllViablePlans(tanks, parcels, policy = {}, opts = {}) {
+  const topN = opts.topN ?? 10;
+  
+  // Step 1: Enumerate all feasible plans
+  const allPlans = enumerateAllFeasiblePlans(tanks, parcels, policy, opts);
+  
+  if (allPlans.length === 0) return [];
+  
+  // Step 2: Pareto filter
+  const paretoPlans = paretoFilter(allPlans);
+  
+  // Step 3: Rank by weighted score
+  const ranked = rankByWeightedScore(paretoPlans, opts.weights);
+  
+  // Step 4: Return top N
+  return ranked.slice(0, topN);
+}
