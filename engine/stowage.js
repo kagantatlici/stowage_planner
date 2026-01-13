@@ -68,6 +68,8 @@ export function parsePairIndex(id) {
   if (m) return parseInt(m[1], 10);
   // Treat SLOPP/SLOPS as a symmetric pair with a synthetic index
   if (/^SLOPP$/i.test(id) || /^SLOPS$/i.test(id)) return 1000;
+  // RESIDUAL tank treated as special center tank
+  if (/^RESIDUAL/i.test(id)) return 2000;
   return null;
 }
 

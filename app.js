@@ -417,6 +417,10 @@ function normalizeCargoNameToId(name) {
     const side = sideLetter === 'P' ? 'port' : 'starboard';
     return { id, side };
   }
+  // RESIDUAL TK / RESIDUE TK variants — treated as center tank
+  if (/RESIDU(AL|E)/.test(s)) {
+    return { id: 'RESIDUAL', side: 'center', isResidue: true };
+  }
   return null;
 }
 
@@ -583,7 +587,9 @@ function mapCargoArrayToTanks(cargoArr, defaults = { min_pct: 0.5, max_pct: 0.98
           : (typeof row.volume === 'number') ? row.volume
             : undefined;
     if (typeof volume !== 'number') continue;
-    out.push({ id, volume_m3: volume, min_pct: defaults.min_pct, max_pct: defaults.max_pct, included: true, side: norm.side });
+    // RESIDUAL tanks are excluded by default (user can include if needed)
+    const included = norm.isResidue ? false : true;
+    out.push({ id, volume_m3: volume, min_pct: defaults.min_pct, max_pct: defaults.max_pct, included, side: norm.side });
     seen.add(id);
   }
   return out;
