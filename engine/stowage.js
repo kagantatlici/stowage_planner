@@ -1822,13 +1822,14 @@ export function computeAllViablePlans(tanks, parcels, policy = {}, opts = {}) {
 }
 
 // ============================================================================
-// SIMPLE BRUTE-FORCE ALGORITHM — No filtering, show ALL feasible options
+// SIMPLE BRUTE-FORCE ALGORITHM — Multi-parcel sequential assignment
 // ============================================================================
 
 /**
  * Simple brute-force: enumerate ALL tank subset combinations.
- * No time limits, no Pareto filtering — just pure enumeration.
- * Returns ALL feasible plans sorted by tank count (fewer tanks first).
+ * Handles MULTIPLE parcels sequentially:
+ * 1. Fixed parcels are processed in order (P1 first, P2 second, etc.)
+ * 2. fill_remaining parcels use leftover capacity at the end
  * 
  * @param {Tank[]} tanks
  * @param {Parcel[]} parcels
@@ -1851,45 +1852,13 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
   const n = pairIndices.length;
   if (n === 0) return [];
 
-  // Get cargo volume - support both fixed and fill_remaining parcels
+  // Sort parcels: fixed first (in order), fill_remaining last
   const allParcels = parcels || [];
-  let targetVolume = 0;
-  let parcel = null;
-
-  // First check for fixed parcels
   const fixedParcels = allParcels.filter(p => !p.fill_remaining && p.total_m3 > 0);
-  if (fixedParcels.length > 0) {
-    parcel = fixedParcels[0];
-    targetVolume = Number(parcel.total_m3) || 0;
-  } else {
-    // Check fill_remaining parcels with a defined total_m3
-    const frParcels = allParcels.filter(p => p.fill_remaining && p.total_m3 > 0);
-    if (frParcels.length > 0) {
-      parcel = frParcels[0];
-      targetVolume = Number(parcel.total_m3) || 0;
-    }
-  }
+  const frParcels = allParcels.filter(p => p.fill_remaining);
+  const sortedParcels = [...fixedParcels, ...frParcels];
 
-  if (!parcel || targetVolume <= 0) return [];
-
-  const results = [];
-  const seenSigs = new Set();
-
-  // Helper: generate allocation signature for dedup
-  const allocSig = (allocs) => allocs
-    .map(a => `${a.tank_id}:${a.assigned_m3.toFixed(1)}`)
-    .sort()
-    .join('|');
-
-  // Helper: compute label from pair indices
-  const labelFromPairs = (pairIdxs, centerTank) => {
-    const parts = pairIdxs
-      .slice()
-      .sort((a, b) => a - b)
-      .map(i => (i >= 1000 ? 'SLOP' : `COT${i}`));
-    if (centerTank) parts.push(centerTank.id);
-    return parts.join('+');
-  };
+  if (sortedParcels.length === 0) return [];
 
   // Helper: water-fill distribution for a given set of tanks
   const waterFill = (tankList, volume, parcelObj) => {
@@ -1903,16 +1872,13 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
     const sumMin = vessels.reduce((s, e) => s + e.min, 0);
     const sumMax = vessels.reduce((s, e) => s + e.max, 0);
 
-    // Check feasibility
     if (volume < sumMin - 1e-6 || volume > sumMax + 1e-6) {
       return null; // infeasible
     }
 
-    // Start at mins
     vessels.forEach(e => { e.vol = e.min; });
     let rem = volume - sumMin;
 
-    // Water-fill remaining
     while (rem > 1e-9) {
       const unsat = vessels.filter(e => e.vol + 1e-9 < e.max);
       if (unsat.length === 0) break;
@@ -1927,7 +1893,6 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
       if (consumed <= 1e-9) break;
     }
 
-    // Build allocations
     const allocations = [];
     for (const e of vessels) {
       if (e.vol <= 1e-9) continue;
@@ -1941,48 +1906,61 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
         weight_mt
       });
     }
-
     return allocations;
   };
 
-  // Enumerate ALL pair subsets via bitmask (no time limit)
-  const maxMask = (1 << n) - 1;
-
-  for (let mask = 1; mask <= maxMask; mask++) {
-    // Extract selected pair indices
-    const selectedPairs = [];
-    for (let i = 0; i < n; i++) {
-      if (mask & (1 << i)) selectedPairs.push(pairIndices[i]);
-    }
-
-    // Collect tanks from selected pairs
+  // Helper: get tanks from pair indices
+  const getTanksFromPairs = (selectedPairs, includeCenter = null) => {
     const tankList = [];
     for (const idx of selectedPairs) {
       const pr = pairs[idx];
       if (pr.port) tankList.push(pr.port);
       if (pr.starboard) tankList.push(pr.starboard);
     }
+    if (includeCenter) tankList.push(includeCenter);
+    return tankList;
+  };
 
-    // Try without center
-    let allocs = waterFill(tankList, targetVolume, parcel);
-    if (allocs && allocs.length > 0) {
-      const sig = allocSig(allocs);
-      if (!seenSigs.has(sig)) {
-        seenSigs.add(sig);
-        results.push({
-          allocations: allocs,
-          pairSelection: selectedPairs,
-          centerUsed: null,
-          label: labelFromPairs(selectedPairs, null),
-          tankCount: allocs.length
-        });
-      }
+  // Helper: compute label from pair indices
+  const labelFromPairs = (pairIdxs, centerTank) => {
+    const parts = pairIdxs
+      .slice()
+      .sort((a, b) => a - b)
+      .map(i => (i >= 1000 ? 'SLOP' : `COT${i}`));
+    if (centerTank) parts.push(centerTank.id);
+    return parts.join('+');
+  };
+
+  const results = [];
+  const seenSigs = new Set();
+
+  // Allocation signature for dedup
+  const allocSig = (allocs) => allocs
+    .map(a => `${a.tank_id}:${a.parcel_id}:${a.assigned_m3.toFixed(1)}`)
+    .sort()
+    .join('|');
+
+  // SINGLE PARCEL CASE (original logic)
+  if (sortedParcels.length === 1) {
+    const parcel = sortedParcels[0];
+    let targetVolume = Number(parcel.total_m3) || 0;
+
+    // For fill_remaining without total_m3, use max capacity
+    if (parcel.fill_remaining && targetVolume <= 0) {
+      targetVolume = included.reduce((s, t) => s + effMax(t), 0);
     }
 
-    // Try with each available center (if any)
-    for (const center of centers) {
-      const tankListWithCenter = [...tankList, center];
-      allocs = waterFill(tankListWithCenter, targetVolume, parcel);
+    if (targetVolume <= 0) return [];
+
+    const maxMask = (1 << n) - 1;
+    for (let mask = 1; mask <= maxMask; mask++) {
+      const selectedPairs = [];
+      for (let i = 0; i < n; i++) {
+        if (mask & (1 << i)) selectedPairs.push(pairIndices[i]);
+      }
+
+      const tankList = getTanksFromPairs(selectedPairs);
+      let allocs = waterFill(tankList, targetVolume, parcel);
       if (allocs && allocs.length > 0) {
         const sig = allocSig(allocs);
         if (!seenSigs.has(sig)) {
@@ -1990,9 +1968,128 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
           results.push({
             allocations: allocs,
             pairSelection: selectedPairs,
-            centerUsed: center,
-            label: labelFromPairs(selectedPairs, center),
+            label: labelFromPairs(selectedPairs, null),
             tankCount: allocs.length
+          });
+        }
+      }
+
+      // With centers
+      for (const center of centers) {
+        const tankListC = [...tankList, center];
+        allocs = waterFill(tankListC, targetVolume, parcel);
+        if (allocs && allocs.length > 0) {
+          const sig = allocSig(allocs);
+          if (!seenSigs.has(sig)) {
+            seenSigs.add(sig);
+            results.push({
+              allocations: allocs,
+              pairSelection: selectedPairs,
+              centerUsed: center,
+              label: labelFromPairs(selectedPairs, center),
+              tankCount: allocs.length
+            });
+          }
+        }
+      }
+    }
+  }
+  // MULTI-PARCEL CASE (2+ parcels)
+  else {
+    const p1 = sortedParcels[0];
+    const p2 = sortedParcels[1];
+    const v1 = Number(p1.total_m3) || 0;
+
+    if (v1 <= 0) return [];
+
+    const maxMask = (1 << n) - 1;
+
+    // Enumerate P1 combinations
+    for (let mask1 = 1; mask1 <= maxMask; mask1++) {
+      const p1Pairs = [];
+      for (let i = 0; i < n; i++) {
+        if (mask1 & (1 << i)) p1Pairs.push(pairIndices[i]);
+      }
+
+      const p1Tanks = getTanksFromPairs(p1Pairs);
+      const p1Allocs = waterFill(p1Tanks, v1, p1);
+      if (!p1Allocs) continue; // P1 infeasible
+
+      // Remaining pairs for P2
+      const p1PairSet = new Set(p1Pairs);
+      const remainingPairs = pairIndices.filter(idx => !p1PairSet.has(idx));
+
+      // P2 volume
+      let v2 = 0;
+      if (p2.fill_remaining) {
+        // fill_remaining: use max capacity of remaining tanks
+        const remainingTanks = getTanksFromPairs(remainingPairs);
+        v2 = remainingTanks.reduce((s, t) => s + effMax(t), 0);
+      } else {
+        v2 = Number(p2.total_m3) || 0;
+      }
+
+      if (v2 <= 0 && remainingPairs.length === 0) {
+        // No P2 needed, just P1
+        const sig = allocSig(p1Allocs);
+        if (!seenSigs.has(sig)) {
+          seenSigs.add(sig);
+          results.push({
+            allocations: [...p1Allocs],
+            pairSelection: p1Pairs,
+            label: `P1:${labelFromPairs(p1Pairs, null)}`,
+            tankCount: p1Allocs.length
+          });
+        }
+        continue;
+      }
+
+      // Enumerate P2 combinations from remaining pairs
+      const m = remainingPairs.length;
+      const maxMask2 = m > 0 ? (1 << m) - 1 : 0;
+
+      for (let mask2 = 1; mask2 <= maxMask2; mask2++) {
+        const p2Pairs = [];
+        for (let j = 0; j < m; j++) {
+          if (mask2 & (1 << j)) p2Pairs.push(remainingPairs[j]);
+        }
+
+        const p2Tanks = getTanksFromPairs(p2Pairs);
+
+        // For fill_remaining, compute actual volume as max capacity
+        let actualV2 = v2;
+        if (p2.fill_remaining) {
+          actualV2 = p2Tanks.reduce((s, t) => s + effMax(t), 0);
+        }
+
+        if (actualV2 <= 0) continue;
+
+        const p2Allocs = waterFill(p2Tanks, actualV2, p2);
+        if (!p2Allocs) continue; // P2 infeasible
+
+        const combined = [...p1Allocs, ...p2Allocs];
+        const sig = allocSig(combined);
+        if (!seenSigs.has(sig)) {
+          seenSigs.add(sig);
+          results.push({
+            allocations: combined,
+            pairSelection: [...p1Pairs, ...p2Pairs],
+            label: `P1:${labelFromPairs(p1Pairs, null)} + P2:${labelFromPairs(p2Pairs, null)}`,
+            tankCount: combined.length
+          });
+        }
+      }
+
+      // Also try P1 alone (no P2 tanks)
+      if (remainingPairs.length > 0) {
+        const sig = allocSig(p1Allocs);
+        if (!seenSigs.has(sig)) {
+          seenSigs.add(sig);
+          results.push({
+            allocations: [...p1Allocs],
+            pairSelection: p1Pairs,
+            label: `P1:${labelFromPairs(p1Pairs, null)}`,
+            tankCount: p1Allocs.length
           });
         }
       }
@@ -2007,7 +2104,6 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
     const emptyTankCount = totalTankCount - usedTankIds.size;
     const tanksUsed = usedTankIds.size;
 
-    // Dead space
     let cmaxUsed = 0, assignedSum = 0;
     for (const a of r.allocations) {
       const t = included.find(tt => tt.id === a.tank_id);
@@ -2016,7 +2112,6 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
     }
     const deadSpace = Math.max(0, cmaxUsed - assignedSum);
 
-    // Balance
     let portWeight = 0, starboardWeight = 0;
     for (const a of r.allocations) {
       const t = included.find(tt => tt.id === a.tank_id);
@@ -2035,6 +2130,27 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
       label: r.label
     };
 
+    // Build reasoning trace for all parcels
+    const parcelIds = [...new Set(r.allocations.map(a => a.parcel_id))];
+    const traces = parcelIds.map(pid => {
+      const pAllocs = r.allocations.filter(a => a.parcel_id === pid);
+      const pVol = pAllocs.reduce((s, a) => s + a.assigned_m3, 0);
+      return {
+        parcel_id: pid,
+        V: pVol,
+        Cmin: 0,
+        Cmax: 0,
+        k_low: 0,
+        k_high: 0,
+        chosen_k: pAllocs.length,
+        parity_adjustment: 'none',
+        per_tank_v: pAllocs.length > 0 ? pVol / pAllocs.length : 0,
+        violates: false,
+        reserved_pairs: [r.label],
+        reason: 'simple brute-force enumeration (multi-parcel sequential)'
+      };
+    });
+
     r.diagnostics = {
       port_weight_mt: portWeight,
       starboard_weight_mt: starboardWeight,
@@ -2042,20 +2158,7 @@ export function computeAllViablePlansSimple(tanks, parcels, policy = {}) {
       imbalance_pct: (portWeight + starboardWeight) > 0
         ? (balanceDiff / (portWeight + starboardWeight)) * 100
         : 0,
-      reasoning_trace: [{
-        parcel_id: parcel.id,
-        V: targetVolume,
-        Cmin: 0,
-        Cmax: 0,
-        k_low: 0,
-        k_high: 0,
-        chosen_k: tanksUsed,
-        parity_adjustment: 'none',
-        per_tank_v: tanksUsed > 0 ? targetVolume / tanksUsed : 0,
-        violates: false,
-        reserved_pairs: [r.label],
-        reason: 'simple brute-force enumeration'
-      }],
+      reasoning_trace: traces,
       warnings: [],
       errors: []
     };
