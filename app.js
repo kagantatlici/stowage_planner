@@ -1451,8 +1451,28 @@ function computeVariants() {
   // === SIMPLE BRUTE-FORCE: All feasible combinations (no filtering) ===
   let simplePlans = [];
   try {
-    simplePlans = computeAllViablePlansSimple(tanks, parcels, policy) || [];
-    console.log(`[SIMPLE] Brute-force found ${simplePlans.length} feasible combinations`);
+    const rawPlans = computeAllViablePlansSimple(tanks, parcels, policy) || [];
+    console.log(`[SIMPLE] Brute-force found ${rawPlans.length} raw combinations`);
+
+    // Apply trim optimization to each plan
+    for (const plan of rawPlans) {
+      try {
+        const optimized = optimizeTrimWithinSelection(plan, { includeSlops: true });
+        if (optimized && Array.isArray(optimized.allocations)) {
+          // Use optimized allocations
+          plan.allocations = optimized.allocations;
+          plan.diagnostics = optimized.diagnostics || plan.diagnostics;
+          if (plan.diagnostics?.reasoning_trace?.[0]) {
+            plan.diagnostics.reasoning_trace[0].reason = 'simple brute-force + trim optimized';
+          }
+        }
+      } catch (e) {
+        // Keep original if optimization fails
+      }
+    }
+
+    simplePlans = rawPlans;
+    console.log(`[SIMPLE] After trim optimization: ${simplePlans.length} plans`);
     if (simplePlans.length > 0) {
       console.log(`[SIMPLE] First 3 options:`, simplePlans.slice(0, 3).map(p => ({
         label: p.label,
